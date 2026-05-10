@@ -3,7 +3,6 @@
 import {
   Ban,
   Bot,
-  ChevronDown,
   Database,
   FileText,
   Gauge,
@@ -154,25 +153,43 @@ export default function Dashboard() {
   }
 
   const can = (key: string) => Boolean(data.feature_access[key]);
+  const activeLabel = visibleNav.find(([id]) => id === active)?.[1] ?? "Dashboard";
 
   return (
     <main className="app-shell">
-      <aside className="rail">
-        <div className="guild-badge">{data.guild.icon_url ? <img src={data.guild.icon_url} alt="" /> : data.guild.name.slice(0, 2)}</div>
-        <nav>
+      <aside className="rail" aria-label="Dashboard navigation">
+        <a className="rail-brand" href="/dashboard" aria-label={`${data.guild.name} dashboard`}>
+          <div className="guild-badge">{data.guild.icon_url ? <img src={data.guild.icon_url} alt="" /> : data.guild.name.slice(0, 2)}</div>
+          <div>
+            <strong>{data.guild.name}</strong>
+            <span>Control Panel</span>
+          </div>
+        </a>
+        <nav aria-label="Dashboard sections">
           {visibleNav.map(([id, label, Icon]) => (
-            <button key={id} className={active === id ? "active" : ""} onClick={() => setActive(id)} title={label}>
+            <button key={id} className={active === id ? "active" : ""} onClick={() => setActive(id)} title={label} aria-label={label}>
               <Icon size={18} />
+              <span>{label}</span>
             </button>
           ))}
         </nav>
-        <a href="/api/logout" title="Logout"><LogOut size={18} /></a>
+        <div className="rail-footer">
+          <img src={data.member.avatar_url} alt="" />
+          <div>
+            <strong>{data.member.display_name}</strong>
+            <span>Signed in</span>
+          </div>
+          <a className="logout-button" href="/api/logout" title="Logout" aria-label="Logout"><LogOut size={18} /><span>Logout</span></a>
+        </div>
       </aside>
 
       <section className="workspace">
         <header className="topbar">
-          <div className="crumbs">
-            <span>Home</span><span>/</span><span>{data.guild.name}</span><span>/</span><strong>Dashboard</strong>
+          <div className="topbar-copy">
+            <div className="crumbs">
+              <span>Home</span><span>/</span><span>{data.guild.name}</span><span>/</span><strong>Dashboard</strong>
+            </div>
+            <h1>{activeLabel}</h1>
           </div>
           <div className="top-actions">
             <button className="button ghost" onClick={() => window.location.reload()}><RefreshCw size={16} />Refresh</button>
@@ -219,11 +236,17 @@ function Overview({ data }: { data: DashboardData }) {
 
   return (
     <>
-      <div className="page-title">
-        <p>CSRP Utilities</p>
-        <h1>Dashboard</h1>
-        <span>{data.member.display_name} in {data.guild.name}</span>
-      </div>
+      <section className="dashboard-hero">
+        <div className="page-title">
+          <p>CSRP Utilities</p>
+          <h1>Dashboard</h1>
+          <span>{data.member.display_name} in {data.guild.name}</span>
+        </div>
+        <div className="hero-summary">
+          <span>Bot latency</span>
+          <strong>{data.stats.bot_latency_ms}ms</strong>
+        </div>
+      </section>
       <section className="stats-row">
         {stats.map(([label, value]) => <article key={label} className="stat-card"><span>{label}</span><strong>{value}</strong></article>)}
       </section>
