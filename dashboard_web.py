@@ -50,6 +50,7 @@ from dashboard_actions import (
     update_dashboard_settings,
 )
 from dashboard_permissions import FEATURES, load_permissions, member_has_access, update_permission
+from dashboard_themes import create_theme, install_theme, list_public_themes, list_user_themes, uninstall_theme
 
 LOG_FILE = "logs.txt"
 API_KEYS_FILE = "APIKeys.txt"
@@ -470,6 +471,41 @@ def api_session():
 @login_required
 def api_dashboard():
     return jsonify(_json_dashboard_context())
+
+
+@app.route("/api/themes", methods=["GET", "POST"])
+@login_required
+def api_themes():
+    member = current_member()
+    user_id = str(member.id)
+
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or {}
+        try:
+            theme = create_theme(payload, user_id, member.display_name)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"theme": theme}), 201
+
+    return jsonify({
+        "marketplace": list_public_themes(),
+        "mine": list_user_themes(user_id),
+    })
+
+
+@app.route("/api/themes/<theme_id>/install", methods=["POST", "DELETE"])
+@login_required
+def api_theme_install(theme_id):
+    user_id = str(current_member().id)
+
+    if request.method == "DELETE":
+        result = uninstall_theme(user_id, theme_id)
+        return jsonify({"removed": bool(result), "deleted": result == "deleted", "mine": list_user_themes(user_id)})
+
+    theme = install_theme(user_id, theme_id)
+    if theme is None:
+        return jsonify({"error": "Theme not found."}), 404
+    return jsonify({"theme": theme, "mine": list_user_themes(user_id)})
 
 
 @app.route("/actions/<action>", methods=["POST"])
