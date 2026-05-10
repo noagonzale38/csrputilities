@@ -10,6 +10,7 @@ import requests
 from flask import (
     Flask,
     flash,
+    has_request_context,
     jsonify,
     redirect,
     render_template,
@@ -75,8 +76,27 @@ def _dashboard_environment_label():
     }.get(dashboard_env, "")
 
 
+def _env_value(name):
+    value = os.getenv(name, "").strip()
+    return value or None
+
+
+def _forwarded_public_origin():
+    if not has_request_context():
+        return None
+
+    forwarded_host = request.headers.get("X-Forwarded-Host", "").split(",")[0].strip()
+    if not forwarded_host:
+        return None
+
+    forwarded_proto = request.headers.get("X-Forwarded-Proto", "").split(",")[0].strip() or (
+        "https" if request.is_secure else "http"
+    )
+    return f"{forwarded_proto}://{forwarded_host}".rstrip("/")
+
+
 def _dashboard_public_origin():
-    return os.getenv("DASHBOARD_PUBLIC_ORIGIN", "http://127.0.0.1:3000").rstrip("/")
+    return (_env_value("DASHBOARD_PUBLIC_ORIGIN") or _forwarded_public_origin() or "http://127.0.0.1:3000").rstrip("/")
 
 
 def _dashboard_url(path=""):
@@ -145,7 +165,7 @@ def internal_authenticate():
 
 
 def _discord_redirect_uri():
-    return os.getenv("DISCORD_REDIRECT_URI") or url_for("auth_callback", _external=True)
+    return _env_value("DISCORD_REDIRECT_URI") or _dashboard_url("/api/auth/callback")
 
 
 def _discord_client_id():
