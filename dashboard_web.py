@@ -193,10 +193,14 @@ def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
         if not session.get("discord_user_id"):
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "Authentication required."}), 401
             return redirect(url_for("login"))
         member = current_member()
         if member is None:
             session.clear()
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "Authentication required."}), 401
             flash("Your Discord account is not in the configured server.", "error")
             return redirect(url_for("index"))
         return view(*args, **kwargs)
