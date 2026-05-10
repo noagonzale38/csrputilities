@@ -1,0 +1,404 @@
+:root {
+  --bg: #07080b;
+  --panel: #090a0d;
+  --panel-2: #0d0f14;
+  --text: #f6f7fb;
+  --muted: #a4a8b3;
+  --line: #252832;
+  --line-soft: #191b22;
+  --accent: #5865f2;
+  --accent-2: #3ba977;
+  --danger: #ef5b5b;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+button, input, textarea, select { font: inherit; }
+button, a { color: inherit; }
+
+.environment-banner {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-bottom: 1px solid rgba(255, 255, 255, .18);
+  background: #f0bf36;
+  color: #101114;
+  font-size: .78rem;
+  font-weight: 900;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.login-page {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(420px, 1.1fr) minmax(380px, .9fr);
+}
+.login-media {
+  position: relative;
+  min-height: 100vh;
+  background:
+    linear-gradient(90deg, rgba(7,8,11,.9), rgba(7,8,11,.36)),
+    url("https://csrptickets-storage.s3.us-east-1.amazonaws.com/CSRP_Staff_Team.webp") center / cover;
+  border-right: 1px solid var(--line);
+}
+.login-overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(7,8,11,.15), rgba(7,8,11,.92));
+}
+.quote {
+  position: absolute;
+  left: 48px;
+  bottom: 48px;
+  width: min(760px, calc(100% - 96px));
+}
+.quote p {
+  font-size: clamp(1.35rem, 2vw, 2.05rem);
+  line-height: 1.45;
+  margin: 18px 0;
+  font-weight: 700;
+}
+.quote span, .login-card p, .page-title span, .setting-card p, label {
+  color: var(--muted);
+}
+.login-panel {
+  min-height: 100vh;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  padding: 40px;
+  position: relative;
+}
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #c8cbd6;
+  font-size: .95rem;
+}
+.login-panel .crumbs {
+  position: absolute;
+  top: 18px;
+  left: 24px;
+}
+.crumbs a { text-decoration: none; }
+.crumbs strong { color: white; }
+.login-card {
+  width: min(420px, 100%);
+  text-align: center;
+}
+.brand-mark, .guild-badge {
+  display: inline-grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  background: var(--accent);
+}
+.login-card h1 {
+  font-size: clamp(2rem, 4vw, 3rem);
+  margin: 5px 0 5px;
+}
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 44px;
+  border-radius: 8px;
+  padding: 0 16px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  text-decoration: none;
+  cursor: pointer;
+  font-weight: 800;
+}
+.button.primary {
+  border-color: transparent;
+  background: var(--accent);
+}
+.button.ghost {
+  background: transparent;
+}
+.button.danger {
+  background: var(--danger);
+  border-color: transparent;
+}
+.wide {
+  width: 100%;
+  margin-top: 14px;
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+}
+.environment-banner + .app-shell {
+  min-height: calc(100vh - 34px);
+}
+.rail {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  border-right: 1px solid var(--line);
+  background: #050609;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 14px 10px;
+}
+.environment-banner + .app-shell .rail {
+  top: 34px;
+  height: calc(100vh - 34px);
+}
+.guild-badge {
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
+  overflow: hidden;
+  font-weight: 900;
+}
+.guild-badge img { width: 100%; height: 100%; object-fit: cover; }
+.rail nav {
+  display: grid;
+  gap: 9px;
+  flex: 1;
+}
+.rail button, .rail a {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.rail button.active, .rail button:hover, .rail a:hover {
+  color: white;
+  border-color: var(--line);
+  background: var(--panel-2);
+}
+.workspace {
+  min-width: 0;
+}
+.topbar {
+  height: 40px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+}
+.top-actions {
+  display: flex;
+  gap: 8px;
+}
+.top-actions .button {
+  min-height: 32px;
+}
+.section-tabs {
+  display: flex;
+  gap: 22px;
+  overflow-x: auto;
+  padding: 0 24px;
+  height: 40px;
+  align-items: center;
+  border-bottom: 1px solid var(--line-soft);
+}
+.section-tabs button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 800;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.section-tabs button.active {
+  color: white;
+}
+.content-grid {
+  width: min(1180px, calc(100vw - 120px));
+  margin: 42px auto;
+  display: grid;
+  gap: 24px;
+}
+.page-title p {
+  margin: 0 0 8px;
+  color: var(--accent);
+  font-weight: 900;
+  text-transform: uppercase;
+  font-size: .78rem;
+}
+.page-title h1 {
+  margin: 0;
+  font-size: clamp(2rem, 4vw, 3.4rem);
+}
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 14px;
+}
+.stat-card, .setting-card {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 8px;
+}
+.stat-card {
+  padding: 16px;
+}
+.stat-card span {
+  color: var(--muted);
+  display: block;
+  margin-bottom: 10px;
+}
+.stat-card strong {
+  font-size: 1.65rem;
+}
+.settings-layout {
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr);
+  gap: 42px;
+}
+.section-index {
+  position: sticky;
+  top: 96px;
+  align-self: start;
+  display: grid;
+  gap: 16px;
+}
+.section-index span {
+  color: #cbd0dd;
+}
+.card-stack {
+  display: grid;
+  gap: 24px;
+}
+.two-col {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 18px;
+}
+.setting-card {
+  padding: 24px;
+}
+.setting-card h2 {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+}
+.form-grid {
+  display: grid;
+  gap: 14px;
+}
+input, textarea, select {
+  width: 100%;
+  color: white;
+  background: #07080b;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 13px;
+  min-height: 42px;
+}
+textarea {
+  min-height: 110px;
+  resize: vertical;
+}
+select[multiple] {
+  min-height: 150px;
+}
+option {
+  padding: 7px;
+}
+.pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.pill-row span {
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  border-radius: 999px;
+  padding: 7px 10px;
+}
+.list-grid {
+  display: grid;
+  gap: 10px;
+}
+.list-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  padding: 12px;
+  background: #07080b;
+}
+.list-item span {
+  color: var(--muted);
+}
+.switch-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.switch-line input {
+  width: auto;
+}
+.danger-card {
+  border-color: rgba(239, 91, 91, .5);
+}
+.state-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  gap: 12px;
+  color: var(--muted);
+}
+.spin {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 900px) {
+  .login-page, .settings-layout, .app-shell {
+    grid-template-columns: 1fr;
+  }
+  .login-media {
+    display: none;
+  }
+  .rail {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    overflow-x: auto;
+  }
+  .rail nav {
+    display: flex;
+  }
+  .content-grid {
+    width: min(100% - 28px, 1180px);
+    margin: 24px auto;
+  }
+  .section-index {
+    position: static;
+  }
+  .topbar {
+    height: auto;
+    padding: 14px;
+    align-items: flex-start;
+    gap: 14px;
+    flex-direction: column;
+  }
+}
