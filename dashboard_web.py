@@ -1,5 +1,7 @@
 import asyncio
 import os
+import shutil
+import subprocess
 import threading
 import uuid
 from functools import wraps
@@ -60,6 +62,7 @@ CORS(app)
 
 _bot_provider = None
 _web_thread = None
+_next_process = None
 
 
 def _dashboard_environment_label():
@@ -69,6 +72,16 @@ def _dashboard_environment_label():
         "development": "Development",
         "dev": "Development",
     }.get(dashboard_env, "")
+
+
+def _dashboard_public_origin():
+    return os.getenv("DASHBOARD_PUBLIC_ORIGIN", "http://127.0.0.1:3000").rstrip("/")
+
+
+def _dashboard_url(path=""):
+    if path and not path.startswith("/"):
+        path = f"/{path}"
+    return f"{_dashboard_public_origin()}{path}"
 
 
 def attach_bot(bot):
@@ -140,6 +153,29 @@ def _discord_client_id():
 
 def _discord_client_secret():
     return os.getenv("DISCORD_CLIENT_SECRET")
+
+
+def start_next_dashboard(host=None, port=None):
+    global _next_process
+    if _next_process and _next_process.poll() is None:
+        return _next_process
+
+    npm = shutil.which("npm.cmd") or shutil.which("npm")
+    if npm is None:
+        raise RuntimeError("npm was not found. Install Node.js/npm before starting the Next.js dashboard.")
+
+    host = host or os.getenv("NEXT_DASHBOARD_HOST", "0.0.0.0")
+    port = str(port or os.getenv("NEXT_DASHBOARD_PORT", "3000"))
+    env = os.environ.copy()
+    env.setdefault("NEXT_PUBLIC_BACKEND_ORIGIN", os.getenv("DASHBOARD_BACKEND_ORIGIN", "http://127.0.0.1:4000"))
+
+    subprocess.run([npm, "run", "build"], cwd=os.getcwd(), env=env, check=True)
+    _next_process = subprocess.Popen(
+        [npm, "run", "start", "--", "-H", host, "-p", port],
+        cwd=os.getcwd(),
+        env=env,
+    )
+    return _next_process
 
 
 def current_member():
@@ -342,7 +378,7 @@ def _json_dashboard_context():
 
 @app.route("/")
 def index():
-    return render_template("landing.html", logged_in=bool(session.get("discord_user_id")), client_id=_discord_client_id())
+    return redirect(_dashboard_url("/"))
 
 
 @app.route("/login")
@@ -402,23 +438,23 @@ def auth_callback():
     if current_member() is None:
         session.clear()
         flash("Your account does not have access to the configured server.", "error")
-        return redirect(url_for("index"))
+        return redirect(_dashboard_url("/"))
 
     flash("Logged in through Discord.", "success")
-    return redirect(url_for("dashboard"))
+    return redirect(_dashboard_url("/dashboard"))
 
 
 @app.route("/logout")
 def logout():
     session.clear()
     flash("Logged out.", "success")
-    return redirect(url_for("index"))
+    return redirect(_dashboard_url("/"))
 
 
 @app.route("/dashboard")
 @login_required
 def dashboard():
-    return render_template("dashboard.html", **_dashboard_context())
+    return redirect(_dashboard_url("/dashboard"))
 
 
 @app.route("/api/session")
@@ -537,9 +573,13 @@ def get_server_latency():
     return jsonify({"latency": get_latency()}), 200
 
 
-def start_web_app(bot, host="0.0.0.0", port=4000):
+def start_web_app(bot, host="0.0.0.0", port=4000, start_next=True):
     global _web_thread
     attach_bot(bot)
+
+    if start_next:
+        start_next_dashboard()
+
     if _web_thread and _web_thread.is_alive():
         return _web_thread
 
