@@ -10,6 +10,9 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
 </head>
 <body>
+  {% if dashboard_environment_label %}
+  <div class="environment-banner">{{ dashboard_environment_label }}</div>
+  {% endif %}
   <div class="page-shell">
     <aside class="sidebar">
       <div>

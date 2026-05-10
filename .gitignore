@@ -21,6 +21,8 @@ ENV/
 .coverage
 .coverage.*
 htmlcov/
+.next/
+node_modules/
 
 # IDE and OS files
 .idea/

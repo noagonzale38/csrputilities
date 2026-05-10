@@ -449,13 +449,21 @@ async def send_bot_message(bot, channel_id: int, content: str) -> str:
 
 
 async def update_dashboard_settings(guild_id: int, form_data: dict) -> str:
+    def _values(key: str) -> list[str]:
+        if hasattr(form_data, "getlist"):
+            listed = [str(value).strip() for value in form_data.getlist(key) if str(value).strip()]
+            if listed:
+                return listed
+        raw_value = str(form_data.get(key, "")).strip()
+        return [value.strip() for value in raw_value.split(",") if value.strip()]
+
     for key in [
         "staff_roles",
         "partnership_allowed_roles",
         "embed_allowed_roles",
         "retire_allowed_roles",
     ]:
-        role_ids = [int(value) for value in form_data.get(key, "").split(",") if value.strip()]
+        role_ids = [int(value) for value in _values(key)]
         update_guild_setting(guild_id, key, role_ids)
 
     for key in ["retirement_log_channel", "staff_feedback_channel"]:

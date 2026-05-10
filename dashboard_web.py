@@ -62,6 +62,15 @@ _bot_provider = None
 _web_thread = None
 
 
+def _dashboard_environment_label():
+    dashboard_env = os.getenv("DASHBOARD_ENV", "").strip().lower()
+    return {
+        "staging": "Staging",
+        "development": "Development",
+        "dev": "Development",
+    }.get(dashboard_env, "")
+
+
 def attach_bot(bot):
     global _bot_provider
     _bot_provider = lambda: bot
@@ -207,6 +216,127 @@ def _dashboard_context():
         "modlog_user_id": modlog_user_id,
         "rank_order": RANK_ORDER,
         "bot_admin_roles": BOT_ADMINISTRATION,
+        "dashboard_environment_label": _dashboard_environment_label(),
+    }
+
+
+def _role_payload(role):
+    return {
+        "id": str(role.id),
+        "name": role.name,
+        "position": role.position,
+        "color": str(role.color),
+    }
+
+
+def _channel_payload(channel):
+    return {
+        "id": str(channel.id),
+        "name": channel.name,
+        "position": channel.position,
+    }
+
+
+def _selected_role_names(role_ids, role_lookup):
+    return [
+        role_lookup.get(int(role_id), f"Unknown role ({role_id})")
+        for role_id in role_ids
+        if str(role_id).strip()
+    ]
+
+
+def _selected_channel_name(channel_id, channel_lookup):
+    if not channel_id:
+        return ""
+    return channel_lookup.get(int(channel_id), f"Unknown channel ({channel_id})")
+
+
+def _json_safe(value):
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _settings_payload(settings):
+    payload = dict(settings)
+    for key in [
+        "staff_roles",
+        "partnership_allowed_roles",
+        "embed_allowed_roles",
+        "retire_allowed_roles",
+    ]:
+        payload[key] = [str(role_id) for role_id in settings.get(key, [])]
+    for key in ["retirement_log_channel", "staff_feedback_channel"]:
+        payload[key] = str(settings.get(key)) if settings.get(key) else ""
+    payload["rank_roles"] = {
+        rank: str(role_id) if role_id else ""
+        for rank, role_id in settings.get("rank_roles", {}).items()
+    }
+    return payload
+
+
+def _permissions_payload(permissions):
+    return {
+        "full_access_roles": [str(role_id) for role_id in permissions.get("full_access_roles", [])],
+        "features": {
+            feature_key: [str(role_id) for role_id in role_ids]
+            for feature_key, role_ids in permissions.get("features", {}).items()
+        },
+    }
+
+
+def _json_dashboard_context():
+    context = _dashboard_context()
+    roles = [_role_payload(role) for role in context["roles"]]
+    channels = [_channel_payload(channel) for channel in context["channels"]]
+    role_lookup = {int(role["id"]): role["name"] for role in roles}
+    channel_lookup = {int(channel["id"]): channel["name"] for channel in channels}
+    settings = context["settings"]
+    permissions = context["permissions_data"]
+
+    readable_settings = {
+        "staff_roles": _selected_role_names(settings.get("staff_roles", []), role_lookup),
+        "partnership_allowed_roles": _selected_role_names(settings.get("partnership_allowed_roles", []), role_lookup),
+        "embed_allowed_roles": _selected_role_names(settings.get("embed_allowed_roles", []), role_lookup),
+        "retire_allowed_roles": _selected_role_names(settings.get("retire_allowed_roles", []), role_lookup),
+        "retirement_log_channel": _selected_channel_name(settings.get("retirement_log_channel"), channel_lookup),
+        "staff_feedback_channel": _selected_channel_name(settings.get("staff_feedback_channel"), channel_lookup),
+        "rank_roles": {
+            rank: (role_lookup.get(int(role_id), f"Unknown role ({role_id})") if role_id else "")
+            for rank, role_id in settings.get("rank_roles", {}).items()
+        },
+    }
+
+    return {
+        "member": {
+            "id": str(context["member"].id),
+            "display_name": context["member"].display_name,
+            "avatar_url": context["member"].display_avatar.url,
+        },
+        "guild": {
+            "id": str(context["guild"].id),
+            "name": context["guild"].name,
+            "icon_url": context["guild"].icon.url if context["guild"].icon else None,
+        },
+        "stats": _json_safe(context["stats"]),
+        "settings": _settings_payload(settings),
+        "readable_settings": readable_settings,
+        "permissions_data": _permissions_payload(permissions),
+        "features": [{"key": key, "label": label} for key, label in context["features"]],
+        "feature_access": context["feature_access"],
+        "has_full_access": context["has_full_access"],
+        "roles": roles,
+        "channels": channels,
+        "erlc_server": context["erlc_server"],
+        "erlc_players": context["erlc_players"],
+        "modlog_results": context["modlog_results"],
+        "modlog_user_id": context["modlog_user_id"],
+        "rank_order": context["rank_order"],
+        "bot_admin_roles": [str(role_id) for role_id in context["bot_admin_roles"]],
     }
 
 
@@ -289,6 +419,21 @@ def logout():
 @login_required
 def dashboard():
     return render_template("dashboard.html", **_dashboard_context())
+
+
+@app.route("/api/session")
+def api_session():
+    return jsonify({
+        "logged_in": bool(session.get("discord_user_id")),
+        "username": session.get("discord_username"),
+        "client_id": _discord_client_id(),
+    })
+
+
+@app.route("/api/dashboard")
+@login_required
+def api_dashboard():
+    return jsonify(_json_dashboard_context())
 
 
 @app.route("/actions/<action>", methods=["POST"])
