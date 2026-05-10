@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CSRP Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
+</head>
+<body class="landing-body">
+  <main class="landing-shell">
+    <section class="hero-card">
+      <p class="eyebrow">CSRP Utilities</p>
+      <h1>Discord bot dashboard and staff control panel.</h1>
+      <p class="hero-copy">Login with Discord to access moderation, staff management, ERLC controls, embeds, partnerships, bot settings, and feature-based role access.</p>
+      <div class="hero-actions">
+        <a class="button primary" href="{{ url_for('login') }}">Login with Discord</a>
+        {% if logged_in %}
+        <a class="button secondary" href="{{ url_for('dashboard') }}">Open Dashboard</a>
+        {% endif %}
+      </div>
+      {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+      <div class="flash-stack">
+        {% for category, message in messages %}
+        <div class="flash {{ category }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% endwith %}
+    </section>
+  </main>
+</body>
+</html>

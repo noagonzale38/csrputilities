@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CSRP Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
+</head>
+<body>
+  <div class="page-shell">
+    <aside class="sidebar">
+      <div>
+        <p class="eyebrow">CSRP Utilities</p>
+        <h1>Dashboard</h1>
+        <p class="muted">{{ member.display_name }} in {{ guild.name }}</p>
+      </div>
+      <nav class="nav-list">
+        <a href="#overview">Overview</a>
+        {% if feature_access.moderation or feature_access.infractions %}<a href="#moderation">Moderation</a>{% endif %}
+        {% if feature_access.staff_management %}<a href="#staff">Staff</a>{% endif %}
+        {% if feature_access.erlc %}<a href="#erlc">ERLC</a>{% endif %}
+        {% if feature_access.partnerships %}<a href="#partnerships">Partnerships</a>{% endif %}
+        {% if feature_access.embed_wizard %}<a href="#embeds">Embed Wizard</a>{% endif %}
+        {% if feature_access.modlogs %}<a href="#modlogs">Modlogs</a>{% endif %}
+        {% if feature_access.command_blacklist %}<a href="#blacklist">Blacklist</a>{% endif %}
+        {% if feature_access.docker_commands %}<a href="#docker">Docker</a>{% endif %}
+        {% if feature_access.bot_updates %}<a href="#updates">Bot Updates</a>{% endif %}
+        {% if feature_access.bot_settings %}<a href="#settings">Bot Settings</a>{% endif %}
+        {% if feature_access.access_manager %}<a href="#access">Access Manager</a>{% endif %}
+      </nav>
+      <a class="button secondary full-width" href="{{ url_for('logout') }}">Logout</a>
+    </aside>
+
+    <main class="content">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+      <div class="flash-stack">
+        {% for category, message in messages %}
+        <div class="flash {{ category }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% endwith %}
+
+      <section id="overview" class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Overview</p>
+            <h2>Server and bot status</h2>
+          </div>
+        </div>
+        <div class="stats-grid">
+          <article class="stat-card"><span>Members</span><strong>{{ stats.member_count }}</strong></article>
+          <article class="stat-card"><span>Roles</span><strong>{{ stats.role_count }}</strong></article>
+          <article class="stat-card"><span>Channels</span><strong>{{ stats.channel_count }}</strong></article>
+          <article class="stat-card"><span>Modlogs</span><strong>{{ stats.modlog_count }}</strong></article>
+          <article class="stat-card"><span>Retirements</span><strong>{{ stats.retirement_count }}</strong></article>
+          <article class="stat-card"><span>ERLC Players</span><strong>{{ stats.erlc_player_count }}</strong></article>
+          <article class="stat-card"><span>Cmd Blacklists</span><strong>{{ stats.command_blacklist_count }}</strong></article>
+          <article class="stat-card"><span>Latency</span><strong>{{ stats.bot_latency_ms }}ms</strong></article>
+        </div>
+      </section>
+
+      {% if feature_access.moderation or feature_access.infractions %}
+      <section id="moderation" class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Moderation</p>
+            <h2>Live Discord actions</h2>
+          </div>
+        </div>
+        <div class="two-col">
+          {% if feature_access.moderation %}
+          <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='warn') }}">
+            <h3>Warn</h3>
+            <input name="target_id" placeholder="User ID" required>
+            <textarea name="reason" placeholder="Reason" required></textarea>
+            <button class="button primary" type="submit">Send Warning</button>
+          </form>
+          <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='kick') }}">
+            <h3>Kick</h3>
+            <input name="target_id" placeholder="User ID" required>
+            <textarea name="reason" placeholder="Reason" required></textarea>
+            <button class="button primary" type="submit">Kick User</button>
+          </form>
+          <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='ban') }}">
+            <h3>Ban</h3>
+            <input name="target_id" placeholder="User ID" required>
+            <textarea name="reason" placeholder="Reason" required></textarea>
+            <button class="button primary" type="submit">Ban User</button>
+          </form>
+          <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='unban') }}">
+            <h3>Unban</h3>
+            <input name="target_id" placeholder="User ID" required>
+            <textarea name="reason" placeholder="Reason" required></textarea>
+            <button class="button primary" type="submit">Unban User</button>
+          </form>
+          <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='mute') }}">
+            <h3>Timeout</h3>
+            <input name="target_id" placeholder="User ID" required>
+            <input name="duration" placeholder="10m / 2h / 1d" required>
+            <textarea name="reason" placeholder="Reason" required></textarea>
+            <button class="button primary" type="submit">Apply Timeout</button>
+          </form>
+          <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='unmute') }}">
+            <h3>Remove Timeout</h3>
+            <input name="target_id" placeholder="User ID" required>
+            <textarea name="reason" placeholder="Reason" required></textarea>
+            <button class="button primary" type="submit">Remove Timeout</button>
+          </form>
+          {% endif %}
+          {% if feature_access.infractions %}
+          <form class="card form-grid accent" method="post" action="{{ url_for('dashboard_action', action='infract') }}">
+            <h3>Infract User</h3>
+            <input name="target_id" placeholder="User ID" required>
+            <input name="punishment" placeholder="Punishment" required>
+            <textarea name="reason" placeholder="Reason" required></textarea>
+            <button class="button primary" type="submit">Create Infraction</button>
+          </form>
+          {% endif %}
+        </div>
+      </section>
+      {% endif %}
+
+      {% if feature_access.staff_management %}
+      <section id="staff" class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Staff</p>
+            <h2>Retire and reinstate</h2>
+          </div>
+        </div>
+        <div class="two-col">
+          <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='retire') }}">
+            <h3>Retire Staff Member</h3>
+            <input name="target_id" placeholder="User ID" required>
+            <button class="button primary" type="submit">Retire</button>
+          </form>
+          <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='reinstate') }}">
+            <h3>Reinstate Staff Member</h3>
+            <input name="target_id" placeholder="User ID" required>
+            <button class="button primary" type="submit">Reinstate</button>
+          </form>
+        </div>
+      </section>
+      {% endif %}
+
+      {% if feature_access.erlc %}
+      <section id="erlc" class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">ERLC</p>
+            <h2>Server tools and stats</h2>
+          </div>
+        </div>
+        <div class="two-col">
+          <article class="card">
+            <h3>Server Snapshot</h3>
+            <p class="muted">Name: {{ erlc_server.get('Name', 'Unavailable') }}</p>
+            <p class="muted">Players: {{ erlc_server.get('CurrentPlayers', 0) }}/{{ erlc_server.get('MaxPlayers', 0) }}</p>
+            <p class="muted">Join Key: {{ erlc_server.get('JoinKey', 'Unavailable') }}</p>
+          </article>
+          <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='erlc_command') }}">
+            <h3>Run ERLC Command</h3>
+            <input name="command" placeholder=":h Server restarting soon" required>
+            <button class="button primary" type="submit">Execute Command</button>
+          </form>
+        </div>
+        <article class="card">
+          <h3>Players</h3>
+          <div class="list-grid">
+            {% for player in erlc_players %}
+            <div class="list-item">{{ player.get('Player', 'Unknown') }} <span>{{ player.get('Team', 'Unknown') }}</span></div>
+            {% else %}
+            <div class="list-item">No player data available.</div>
+            {% endfor %}
+          </div>
+        </article>
+      </section>
+      {% endif %}
+
+      {% if feature_access.partnerships %}
+      <section id="partnerships" class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Partnerships</p>
+            <h2>Send partnership announcements</h2>
+          </div>
+        </div>
+        <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='partnership') }}">
+          <select name="channel_id" required>
+            {% for channel in channels %}
+            <option value="{{ channel.id }}">#{{ channel.name }}</option>
+            {% endfor %}
+          </select>
+          <textarea name="body" placeholder="Partnership message body" required></textarea>
+          <button class="button primary" type="submit">Send Partnership</button>
+        </form>
+      </section>
+      {% endif %}
+
+      {% if feature_access.embed_wizard %}
+      <section id="embeds" class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Embed Wizard</p>
+            <h2>Step-by-step embed builder</h2>
+          </div>
+        </div>
+        <form class="card wizard-form" method="post" action="{{ url_for('dashboard_action', action='embed_send') }}">
+          <div class="wizard-steps">
+            <button class="wizard-tab active" type="button" data-step="0">1. Channel</button>
+            <button class="wizard-tab" type="button" data-step="1">2. Content</button>
+            <button class="wizard-tab" type="button" data-step="2">3. Style</button>
+            <button class="wizard-tab" type="button" data-step="3">4. Media</button>
+          </div>
+          <div class="wizard-panel active" data-step="0">
+            <label>Target channel</label>
+            <select name="channel_id" required>
+              {% for channel in channels %}
+              <option value="{{ channel.id }}">#{{ channel.name }}</option>
+              {% endfor %}
+            </select>
+            <label>Plain message content</label>
+            <textarea name="content" placeholder="Optional text above the embed"></textarea>
+          </div>
+          <div class="wizard-panel" data-step="1">
+            <label>Title</label>
+            <input name="title" placeholder="Embed title">
+            <label>Description</label>
+            <textarea name="description" placeholder="Embed description"></textarea>
+            <label>Fields</label>
+            <textarea name="fields" placeholder="Name | Value | inline&#10;Rules | Be respectful | true"></textarea>
+          </div>
+          <div class="wizard-panel" data-step="2">
+            <label>Hex color</label>
+            <input name="color" value="#2B2D31">
+            <label>URL</label>
+            <input name="url" placeholder="https://example.com">
+            <label>Author name</label>
+            <input name="author_name" placeholder="Author name">
+            <label>Author URL</label>
+            <input name="author_url" placeholder="https://example.com">
+            <label>Author icon URL</label>
+            <input name="author_icon_url" placeholder="https://example.com/icon.png">
+            <label>Footer text</label>
+            <input name="footer_text" placeholder="Footer text">
+            <label>Footer icon URL</label>
+            <input name="footer_icon_url" placeholder="https://example.com/footer.png">
+          </div>
+          <div class="wizard-panel" data-step="3">
+            <label>Thumbnail URL</label>
+            <input name="thumbnail_url" placeholder="https://example.com/thumb.png">
+            <label>Image URL</label>
+            <input name="image_url" placeholder="https://example.com/image.png">
+          </div>
+          <div class="wizard-actions">
+            <button class="button secondary" type="button" id="wizardPrev">Back</button>
+            <button class="button secondary" type="button" id="wizardNext">Next</button>
+            <button class="button primary" type="submit">Send Embed</button>
+          </div>
+        </form>
+      </section>
+      {% endif %}
+
+      {% if feature_access.modlogs %}
+      <section id="modlogs" class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Modlogs</p>
+            <h2>Lookup and clear logs</h2>
+          </div>
+        </div>
+        <div class="two-col">
+          <form class="card form-grid" method="get" action="{{ url_for('dashboard') }}">
+            <h3>Lookup User Logs</h3>
+            <input name="modlog_user_id" placeholder="User ID" value="{{ modlog_user_id }}">
+            <button class="button primary" type="submit">View Logs</button>
+          </form>
+          <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='modlogs_clear_user') }}">
+            <h3>Clear User Logs</h3>
+            <input name="target_id" placeholder="User ID" required>
+            <button class="button primary" type="submit">Clear User Logs</button>
+          </form>
+        </div>
+        <form class="card form-grid danger-card" method="post" action="{{ url_for('dashboard_action', action='modlogs_clear_all') }}">
+          <h3>Clear All Modlogs</h3>
+          <button class="button danger" type="submit">Clear Everything</button>
+        </form>
+        {% if modlog_results is not none %}
+        <article class="card">
+          <h3>Results for {{ modlog_user_id }}</h3>
+          <div class="list-grid">
+            {% for log in modlog_results %}
+            <div class="list-item">
+              {{ log.action }} <span>Case #{{ log.case_id }} | {{ log.reason }}</span>
+            </div>
+            {% else %}
+            <div class="list-item">No modlogs found.</div>
+            {% endfor %}
+          </div>
+        </article>
+        {% endif %}
+      </section>
+      {% endif %}
+
+      {% if feature_access.command_blacklist %}
+      <section id="blacklist" class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Blacklist</p>
+            <h2>ERLC command blacklist</h2>
+          </div>
+        </div>
+        <div class="two-col">
+          <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='blacklist_add') }}">
+            <h3>Add User</h3>
+            <input name="target_id" placeholder="User ID" required>
+            <button class="button primary" type="submit">Blacklist</button>
+          </form>
+          <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='blacklist_remove') }}">
+            <h3>Remove User</h3>
+            <input name="target_id" placeholder="User ID" required>
+            <button class="button primary" type="submit">Remove Blacklist</button>
+          </form>
+        </div>
+      </section>
+      {% endif %}
+
+      {% if feature_access.docker_commands %}
+      <section id="docker" class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Docker</p>
+            <h2>Run database commands</h2>
+          </div>
+        </div>
+        <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='docker_exec') }}">
+          <input name="database" placeholder="Database name" required>
+          <textarea name="command" placeholder="SQL command" required></textarea>
+          <button class="button primary" type="submit">Execute Docker Command</button>
+        </form>
+      </section>
+      {% endif %}
+
+      {% if feature_access.bot_updates %}
+      <section id="updates" class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Bot Updates</p>
+            <h2>Status and messages</h2>
+          </div>
+        </div>
+        <div class="two-col">
+          <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='bot_status') }}">
+            <h3>Update Presence</h3>
+            <input name="status_text" placeholder="New status text" required>
+            <button class="button primary" type="submit">Update Status</button>
+          </form>
+          <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='bot_message') }}">
+            <h3>Send Bot Message</h3>
+            <select name="channel_id" required>
+              {% for channel in channels %}
+              <option value="{{ channel.id }}">#{{ channel.name }}</option>
+              {% endfor %}
+            </select>
+            <textarea name="content" placeholder="Message content" required></textarea>
+            <button class="button primary" type="submit">Send Message</button>
+          </form>
+        </div>
+      </section>
+      {% endif %}
+
+      {% if feature_access.bot_settings %}
+      <section id="settings" class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Bot Settings</p>
+            <h2>Guild configuration</h2>
+          </div>
+        </div>
+        <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='settings_save') }}">
+          <label>Staff role IDs (comma separated)</label>
+          <input name="staff_roles" value="{{ settings.staff_roles|join(',') }}">
+          <label>Partnership role IDs</label>
+          <input name="partnership_allowed_roles" value="{{ settings.partnership_allowed_roles|join(',') }}">
+          <label>Embed role IDs</label>
+          <input name="embed_allowed_roles" value="{{ settings.embed_allowed_roles|join(',') }}">
+          <label>Retire / reinstate role IDs</label>
+          <input name="retire_allowed_roles" value="{{ settings.retire_allowed_roles|join(',') }}">
+          <label>Retirement log channel ID</label>
+          <input name="retirement_log_channel" value="{{ settings.retirement_log_channel or '' }}">
+          <label>Staff feedback channel ID</label>
+          <input name="staff_feedback_channel" value="{{ settings.staff_feedback_channel or '' }}">
+          <label class="checkbox-line"><input type="checkbox" name="feedback_enabled" {% if settings.feedback_enabled %}checked{% endif %}> Feedback enabled</label>
+          <label>Feedback questions</label>
+          <textarea name="feedback_questions">{{ settings.feedback_questions|join('\n') }}</textarea>
+          <h3>Rank Role Mapping</h3>
+          {% for rank in rank_order %}
+          <label>{{ rank }}</label>
+          <input name="rank::{{ rank }}" value="{{ settings.rank_roles.get(rank) or '' }}">
+          {% endfor %}
+          <button class="button primary" type="submit">Save Bot Settings</button>
+        </form>
+      </section>
+      {% endif %}
+
+      {% if feature_access.access_manager %}
+      <section id="access" class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Access Manager</p>
+            <h2>Feature-based role permissions</h2>
+          </div>
+        </div>
+        <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='access_save') }}">
+          <label>Full dashboard access</label>
+          <select name="full_access_roles" multiple size="8">
+            {% for role in roles %}
+            <option value="{{ role.id }}" {% if role.id in permissions_data.full_access_roles %}selected{% endif %}>{{ role.name }}</option>
+            {% endfor %}
+          </select>
+          {% for feature_key, feature_label in features %}
+          <label>{{ feature_label }}</label>
+          <select name="feature::{{ feature_key }}" multiple size="8">
+            {% for role in roles %}
+            <option value="{{ role.id }}" {% if role.id in permissions_data.features[feature_key] %}selected{% endif %}>{{ role.name }}</option>
+            {% endfor %}
+          </select>
+          {% endfor %}
+          <button class="button primary" type="submit">Save Access Rules</button>
+        </form>
+      </section>
+      {% endif %}
+    </main>
+  </div>
+  <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>

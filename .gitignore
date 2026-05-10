@@ -1,0 +1,58 @@
+# Environment and secrets
+.env
+.env.*
+APIKeys.txt
+
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.python-version
+.venv/
+venv/
+env/
+ENV/
+
+# Test and tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# IDE and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Logs and process output
+*.log
+nohup.out
+log.txt
+logs.txt
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Repo runtime state and generated data
+BanLogs.txt
+blacklisted_users.txt
+casefile.txt
+received_logs.txt
+report_blacklists.txt
+afk.json
+dashboard_permissions.json
+embed_messages.json
+guild_settings.json
+hits.json
+modlogs.json
+retirements.json
+testing_users.json
+
+# Accidental version-marker files
+=*

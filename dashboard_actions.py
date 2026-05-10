@@ -1,0 +1,472 @@
+import json
+import re
+import subprocess
+import time
+from datetime import timedelta
+from typing import Any
+
+import discord
+
+from config import (
+    INFRACTION_CHANNEL,
+    REPORT_GUILD_ID,
+    SERVER_KEY,
+    blacklisted_command,
+    modlogs_file,
+    report_blacklists,
+)
+from cogs.helpers import CSRP_ICON, api_get, api_post
+from cogs.moderation import (
+    clear_all_modlogs_data,
+    clear_user_modlogs,
+    get_next_case,
+    parse_time,
+    save_modlog,
+)
+from cogs.settings import DEFAULT_SETTINGS, RANK_ORDER, get_guild_settings, update_guild_setting, update_rank_role
+from cogs.staffmgmt import (
+    DEMOTION_MAP,
+    _can_manage_rank,
+    _get_member_highest_rank,
+    _get_target_role_ids,
+    get_retirement,
+    load_retirements,
+    remove_retirement,
+    save_retirement,
+)
+
+PRC_API = "https://api.policeroleplay.community/v1"
+PRC_HEADERS = {"Content-Type": "application/json", "Server-Key": SERVER_KEY}
+DEFAULT_GUILD_ID = REPORT_GUILD_ID
+
+
+def _load_json_file(path: str, fallback: Any):
+    try:
+        with open(path, "r") as file:
+            return json.load(file)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return fallback
+
+
+def _load_lines(path: str) -> list[str]:
+    try:
+        with open(path, "r") as file:
+            return [line.strip() for line in file if line.strip()]
+    except FileNotFoundError:
+        return []
+
+
+def _save_lines(path: str, lines: list[str]) -> None:
+    with open(path, "w") as file:
+        file.write("\n".join(lines) + ("\n" if lines else ""))
+
+
+async def get_target_guild(bot) -> discord.Guild:
+    guild = bot.get_guild(DEFAULT_GUILD_ID)
+    if guild is None:
+        raise RuntimeError(f"Bot is not connected to guild {DEFAULT_GUILD_ID}.")
+    return guild
+
+
+async def get_member(bot, user_id: int) -> discord.Member:
+    guild = await get_target_guild(bot)
+    member = guild.get_member(int(user_id))
+    if member is None:
+        member = await guild.fetch_member(int(user_id))
+    return member
+
+
+async def get_actor_member(bot, actor_id: int) -> discord.Member:
+    return await get_member(bot, actor_id)
+
+
+async def collect_dashboard_stats(bot) -> dict:
+    guild = await get_target_guild(bot)
+    modlogs = _load_json_file(modlogs_file, [])
+    retirements = load_retirements().get(str(guild.id), {})
+    command_blacklist_count = len(_load_lines(blacklisted_command))
+    report_blacklist_count = len(_load_lines(report_blacklists))
+    start_time = getattr(getattr(bot, "cogs", {}).get("Utility"), "start_time", None)
+    uptime_seconds = int(time.time() - start_time) if start_time else 0
+
+    erlc_server = {}
+    erlc_players = []
+    try:
+        _, erlc_server = await api_get(f"{PRC_API}/server", headers={"Server-Key": SERVER_KEY})
+        _, erlc_players = await api_get(f"{PRC_API}/server/players", headers={"Server-Key": SERVER_KEY})
+    except Exception:
+        pass
+
+    return {
+        "guild_name": guild.name,
+        "member_count": guild.member_count or len(guild.members),
+        "role_count": len(guild.roles),
+        "channel_count": len(guild.channels),
+        "modlog_count": len(modlogs),
+        "retirement_count": len(retirements),
+        "command_blacklist_count": command_blacklist_count,
+        "report_blacklist_count": report_blacklist_count,
+        "bot_name": bot.user.display_name if bot.user else "Bot",
+        "bot_id": bot.user.id if bot.user else None,
+        "bot_latency_ms": round(bot.latency * 1000),
+        "bot_created_at": bot.user.created_at if bot.user else None,
+        "uptime_seconds": max(uptime_seconds, 0),
+        "erlc_server": erlc_server or {},
+        "erlc_player_count": len(erlc_players) if isinstance(erlc_players, list) else 0,
+    }
+
+
+async def fetch_erlc_players() -> list[dict]:
+    status, players = await api_get(f"{PRC_API}/server/players", headers={"Server-Key": SERVER_KEY})
+    if status != 200 or not isinstance(players, list):
+        raise RuntimeError("Failed to fetch ERLC players.")
+    return players
+
+
+async def fetch_erlc_server() -> dict:
+    status, data = await api_get(f"{PRC_API}/server", headers={"Server-Key": SERVER_KEY})
+    if status != 200 or not isinstance(data, dict):
+        raise RuntimeError("Failed to fetch ERLC server information.")
+    return data
+
+
+async def send_erlc_command(command: str) -> str:
+    normalized = command if command.startswith(":") else f":{command}"
+    status, _ = await api_post(f"{PRC_API}/server/command", headers=PRC_HEADERS, json={"command": normalized})
+    if status != 200:
+        raise RuntimeError(f"ERLC API returned status {status}.")
+    return normalized
+
+
+async def perform_warn(bot, actor_id: int, target_id: int, reason: str) -> str:
+    actor = await get_actor_member(bot, actor_id)
+    member = await get_member(bot, target_id)
+    case_id = get_next_case()
+    save_modlog(member.id, "Warn", reason, actor.id, case_id)
+    try:
+        await member.send(f"Case #{case_id}: You have been warned in {member.guild.name} for: {reason}")
+    except discord.HTTPException:
+        pass
+    return f"Warned {member.display_name} with case #{case_id}."
+
+
+async def perform_kick(bot, actor_id: int, target_id: int, reason: str) -> str:
+    actor = await get_actor_member(bot, actor_id)
+    member = await get_member(bot, target_id)
+    case_id = get_next_case()
+    try:
+        await member.send(f"Case #{case_id}: You have been kicked from {member.guild.name} for: {reason}")
+    except discord.HTTPException:
+        pass
+    await member.kick(reason=f"{reason} | Dashboard by {actor}")
+    save_modlog(member.id, "Kick", reason, actor.id, case_id)
+    return f"Kicked {member.display_name} with case #{case_id}."
+
+
+async def perform_ban(bot, actor_id: int, target_id: int, reason: str) -> str:
+    actor = await get_actor_member(bot, actor_id)
+    guild = await get_target_guild(bot)
+    member = guild.get_member(int(target_id))
+    user = member or await bot.fetch_user(int(target_id))
+    case_id = get_next_case()
+    try:
+        await user.send(f"Case #{case_id}: You have been banned from {guild.name} for: {reason}")
+    except discord.HTTPException:
+        pass
+    await guild.ban(user, reason=f"{reason} | Dashboard by {actor}", delete_message_days=0)
+    save_modlog(user.id, "Ban", reason, actor.id, case_id)
+    return f"Banned {getattr(user, 'display_name', user.name)} with case #{case_id}."
+
+
+async def perform_unban(bot, actor_id: int, target_id: int, reason: str) -> str:
+    actor = await get_actor_member(bot, actor_id)
+    guild = await get_target_guild(bot)
+    user = await bot.fetch_user(int(target_id))
+    await guild.unban(user, reason=f"{reason} | Dashboard by {actor}")
+    case_id = get_next_case()
+    save_modlog(user.id, "Unban", reason, actor.id, case_id)
+    return f"Unbanned {user.name} with case #{case_id}."
+
+
+async def perform_mute(bot, actor_id: int, target_id: int, duration_text: str, reason: str) -> str:
+    actor = await get_actor_member(bot, actor_id)
+    member = await get_member(bot, target_id)
+    duration_seconds = parse_time(duration_text)
+    if duration_seconds is None:
+        raise RuntimeError("Invalid duration. Use formats like 10m, 2h, 1d, 1w.")
+    await member.timeout(timedelta(seconds=duration_seconds), reason=f"{reason} | Dashboard by {actor}")
+    case_id = get_next_case()
+    save_modlog(member.id, "Mute", reason, actor.id, case_id)
+    return f"Muted {member.display_name} for {duration_text} with case #{case_id}."
+
+
+async def perform_unmute(bot, actor_id: int, target_id: int, reason: str) -> str:
+    actor = await get_actor_member(bot, actor_id)
+    member = await get_member(bot, target_id)
+    await member.timeout(None, reason=f"{reason} | Dashboard by {actor}")
+    case_id = get_next_case()
+    save_modlog(member.id, "Unmute", reason, actor.id, case_id)
+    return f"Removed timeout from {member.display_name} with case #{case_id}."
+
+
+async def perform_infract(bot, actor_id: int, target_id: int, punishment: str, reason: str) -> str:
+    actor = await get_actor_member(bot, actor_id)
+    member = await get_member(bot, target_id)
+    channel = bot.get_channel(INFRACTION_CHANNEL)
+    if channel is None:
+        raise RuntimeError("Infraction channel is unavailable.")
+
+    reference_id = int(time.time())
+    embed = discord.Embed(
+        title="CSRP Infraction",
+        description=(
+            f"**User:** {member.mention}\n"
+            f"**Action:** {punishment}\n"
+            f"**Reason:** {reason}\n"
+            f"**Reference ID:** `{reference_id}`"
+        ),
+        color=discord.Color.blue(),
+    )
+    embed.set_footer(text=f"Signed by {actor}", icon_url=actor.display_avatar.url)
+    await channel.send(content=member.mention, embed=embed)
+
+    dm_embed = discord.Embed(
+        title="Infraction Notice",
+        description=(
+            f"You have been infracted in **{member.guild.name}**.\n\n"
+            f"> **Punishment:** {punishment}\n"
+            f"> **Reason:** {reason}\n"
+            f"> **Reference ID:** `{reference_id}`"
+        ),
+        color=discord.Color.blurple(),
+    )
+    dm_embed.set_author(name=member.guild.name, icon_url=CSRP_ICON)
+    try:
+        await member.send(embed=dm_embed)
+    except discord.HTTPException:
+        pass
+    save_modlog(member.id, f"Infraction: {punishment}", reason, actor.id, reference_id)
+    return f"Infracted {member.display_name} with reference #{reference_id}."
+
+
+def get_modlogs_for_user(user_id: int) -> list[dict]:
+    modlogs = _load_json_file(modlogs_file, [])
+    return [entry for entry in modlogs if int(entry.get("user_id", 0)) == int(user_id)]
+
+
+async def clear_modlogs_for_user(target_id: int) -> str:
+    clear_user_modlogs(int(target_id))
+    return f"Cleared modlogs for user ID {target_id}."
+
+
+async def clear_all_modlogs() -> str:
+    clear_all_modlogs_data()
+    return "Cleared all modlogs."
+
+
+async def perform_retire(bot, actor_id: int, target_id: int) -> str:
+    guild = await get_target_guild(bot)
+    actor = await get_actor_member(bot, actor_id)
+    member = await get_member(bot, target_id)
+    settings = get_guild_settings(guild.id)
+
+    staff_role_ids = set(settings.get("staff_roles", []))
+    if not staff_role_ids:
+        raise RuntimeError("Staff roles are not configured.")
+
+    user_staff_roles = [role for role in member.roles if role.id in staff_role_ids]
+    if not user_staff_roles:
+        raise RuntimeError("That user does not currently have configured staff roles.")
+
+    actor_rank = _get_member_highest_rank(actor, settings)
+    target_rank = _get_member_highest_rank(member, settings)
+    if not _can_manage_rank(actor_rank, target_rank):
+        raise RuntimeError("You cannot retire a member with a higher saved rank than your own.")
+
+    save_retirement(
+        guild.id,
+        member.id,
+        {
+            "previous_roles": [role.id for role in user_staff_roles],
+            "highest_rank": target_rank,
+            "retired_by": actor.id,
+            "retired_at": int(time.time()),
+        },
+    )
+    await member.remove_roles(*user_staff_roles, reason=f"Retired via dashboard by {actor}")
+    return f"Retired {member.display_name}."
+
+
+async def perform_reinstate(bot, actor_id: int, target_id: int) -> str:
+    guild = await get_target_guild(bot)
+    actor = await get_actor_member(bot, actor_id)
+    member = await get_member(bot, target_id)
+    settings = get_guild_settings(guild.id)
+    retirement = get_retirement(guild.id, member.id)
+
+    if not retirement:
+        raise RuntimeError("No retirement record exists for that user.")
+
+    highest_rank = retirement.get("highest_rank")
+    actor_rank = _get_member_highest_rank(actor, settings)
+    if not _can_manage_rank(actor_rank, highest_rank):
+        raise RuntimeError("You cannot reinstate a member with a higher saved rank than your own.")
+    if highest_rank not in DEMOTION_MAP:
+        raise RuntimeError("That retirement record requires manual handling.")
+
+    demoted_rank = DEMOTION_MAP[highest_rank]
+    role_ids, warnings = _get_target_role_ids(settings, retirement, highest_rank, demoted_rank)
+    if warnings:
+        raise RuntimeError(" ".join(warnings))
+
+    roles = []
+    for role_id in role_ids:
+        role = guild.get_role(role_id)
+        if role is None:
+            raise RuntimeError(f"Configured role {role_id} no longer exists.")
+        roles.append(role)
+
+    await member.add_roles(*roles, reason=f"Reinstated via dashboard by {actor}")
+    remove_retirement(guild.id, member.id)
+    return f"Reinstated {member.display_name} as {demoted_rank}."
+
+
+async def send_partnership(bot, actor_id: int, channel_id: int, body: str) -> str:
+    actor = await get_actor_member(bot, actor_id)
+    channel = bot.get_channel(int(channel_id))
+    if channel is None:
+        raise RuntimeError("Target channel was not found.")
+
+    guild = await get_target_guild(bot)
+    embed = discord.Embed(title="Partnership", description=body, color=discord.Color.gold())
+    embed.set_author(name=guild.name, icon_url=guild.icon.url if guild.icon else CSRP_ICON)
+    embed.set_footer(text=f"Sent by {actor}", icon_url=actor.display_avatar.url)
+    await channel.send(embed=embed)
+    return f"Sent partnership embed to #{channel.name}."
+
+
+def _parse_fields(raw: str) -> list[tuple[str, str, bool]]:
+    fields = []
+    for line in (raw or "").splitlines():
+        parts = [part.strip() for part in line.split("|")]
+        if len(parts) >= 2:
+            fields.append((parts[0], parts[1], len(parts) >= 3 and parts[2].lower() in {"1", "true", "yes", "inline"}))
+    return fields[:25]
+
+
+async def send_custom_embed(bot, actor_id: int, payload: dict) -> str:
+    actor = await get_actor_member(bot, actor_id)
+    channel = bot.get_channel(int(payload["channel_id"]))
+    if channel is None:
+        raise RuntimeError("Embed target channel was not found.")
+
+    embed = discord.Embed(
+        title=payload.get("title") or None,
+        description=payload.get("description") or None,
+        color=discord.Color(int((payload.get("color") or "2B2D31").replace("#", ""), 16)),
+        url=payload.get("url") or None,
+    )
+    if payload.get("author_name"):
+        embed.set_author(
+            name=payload["author_name"],
+            icon_url=payload.get("author_icon_url") or None,
+            url=payload.get("author_url") or None,
+        )
+    if payload.get("footer_text"):
+        embed.set_footer(text=payload["footer_text"], icon_url=payload.get("footer_icon_url") or None)
+    if payload.get("thumbnail_url"):
+        embed.set_thumbnail(url=payload["thumbnail_url"])
+    if payload.get("image_url"):
+        embed.set_image(url=payload["image_url"])
+
+    for name, value, inline in _parse_fields(payload.get("fields", "")):
+        embed.add_field(name=name, value=value, inline=inline)
+
+    await channel.send(content=payload.get("content") or None, embed=embed)
+    return f"Sent custom embed to #{channel.name} for {actor.display_name}."
+
+
+async def blacklist_command_user(target_id: int) -> str:
+    entry = f"{{userid: {int(target_id)}}}"
+    lines = _load_lines(blacklisted_command)
+    if entry not in lines:
+        lines.append(entry)
+        _save_lines(blacklisted_command, lines)
+    return f"Blacklisted user ID {target_id} from ERLC commands."
+
+
+async def unblacklist_command_user(target_id: int) -> str:
+    entry = f"{{userid: {int(target_id)}}}"
+    lines = [line for line in _load_lines(blacklisted_command) if line != entry]
+    _save_lines(blacklisted_command, lines)
+    return f"Removed user ID {target_id} from the ERLC command blacklist."
+
+
+async def run_docker_exec(database: str, sql_command: str) -> str:
+    safe_database = database.strip()
+    if not re.fullmatch(r"[A-Za-z0-9_]+", safe_database):
+        raise RuntimeError("Invalid database name.")
+
+    command = [
+        "sudo",
+        "-n",
+        "docker",
+        "exec",
+        "-i",
+        "postgres",
+        "psql",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-U",
+        "postgres",
+        "-d",
+        safe_database,
+    ]
+    result = subprocess.run(
+        command,
+        input=sql_command,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    output = result.stdout.strip() or result.stderr.strip() or "(no output)"
+    if result.returncode != 0:
+        raise RuntimeError(output[:4000])
+    return output[:4000]
+
+
+async def update_bot_status(bot, status_text: str) -> str:
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.playing, name=status_text))
+    return f"Updated bot status to '{status_text}'."
+
+
+async def send_bot_message(bot, channel_id: int, content: str) -> str:
+    channel = bot.get_channel(int(channel_id))
+    if channel is None:
+        raise RuntimeError("Target channel was not found.")
+    await channel.send(content)
+    return f"Sent message to #{channel.name}."
+
+
+async def update_dashboard_settings(guild_id: int, form_data: dict) -> str:
+    for key in [
+        "staff_roles",
+        "partnership_allowed_roles",
+        "embed_allowed_roles",
+        "retire_allowed_roles",
+    ]:
+        role_ids = [int(value) for value in form_data.get(key, "").split(",") if value.strip()]
+        update_guild_setting(guild_id, key, role_ids)
+
+    for key in ["retirement_log_channel", "staff_feedback_channel"]:
+        raw_value = form_data.get(key, "").strip()
+        update_guild_setting(guild_id, key, int(raw_value) if raw_value else None)
+
+    update_guild_setting(guild_id, "feedback_enabled", form_data.get("feedback_enabled") == "on")
+    questions = [line.strip() for line in form_data.get("feedback_questions", "").splitlines() if line.strip()]
+    update_guild_setting(guild_id, "feedback_questions", questions or DEFAULT_SETTINGS["feedback_questions"])
+
+    for rank in RANK_ORDER:
+        raw_value = form_data.get(f"rank::{rank}", "").strip()
+        update_rank_role(guild_id, rank, int(raw_value) if raw_value else None)
+    return "Updated bot settings."
