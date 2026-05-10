@@ -190,7 +190,6 @@ def start_next_dashboard(host=None, port=None):
     env = os.environ.copy()
     env.setdefault("NEXT_PUBLIC_BACKEND_ORIGIN", os.getenv("DASHBOARD_BACKEND_ORIGIN", "http://127.0.0.1:4000"))
 
-    subprocess.run([npm, "run", "build"], cwd=os.getcwd(), env=env, check=True)
     _next_process = subprocess.Popen(
         [npm, "run", "start", "--", "-H", host, "-p", port],
         cwd=os.getcwd(),
