@@ -658,7 +658,12 @@ body.is-resizing-rail * {
 }
 
 .setting-card {
+  position: relative;
   padding: 22px;
+}
+
+.setting-card:has(.dropdown-select.open) {
+  z-index: 80;
 }
 
 .setting-card h2 {
@@ -776,7 +781,7 @@ option {
 
 .dropdown-panel {
   position: absolute;
-  z-index: 40;
+  z-index: 90;
   top: calc(100% + 6px);
   left: 0;
   right: 0;

@@ -104,8 +104,8 @@ const navigation = [
 ] as const;
 
 const accessMap: Record<string, string[]> = {
-  moderation: ["moderation", "infractions"],
-  staff: ["staff_management"],
+  moderation: ["moderation"],
+  staff: ["staff_management", "infractions"],
   erlc: ["erlc"],
   partnerships: ["partnerships"],
   embeds: ["embed_wizard"],
@@ -121,6 +121,7 @@ const DEFAULT_THEME_ID = "csrp-default";
 const SELECTED_THEME_STORAGE_KEY = "csrp-dashboard-selected-theme";
 const CUSTOM_THEMES_STORAGE_KEY = "csrp-dashboard-custom-themes";
 const CUSTOM_THEME_LIMIT = 24;
+const DEFAULT_THEME_AUTHOR = "CSRP Utilities";
 
 const THEME_COLOR_FIELDS: { key: keyof ThemeColors; label: string }[] = [
   { key: "background", label: "Background" },
@@ -144,9 +145,9 @@ const MARKETPLACE_THEMES: ThemeDefinition[] = [
     id: DEFAULT_THEME_ID,
     name: "CSRP Default",
     description: "A clean emerald control panel for day-to-day staff work.",
-    author: "CSRP Utilities",
+    author: DEFAULT_THEME_AUTHOR,
     tags: ["default", "staff", "green"],
-    downloads: 2194,
+    downloads: 0,
     updated: "5/10/2026",
     rating: 4.8,
     source: "marketplace",
@@ -171,9 +172,9 @@ const MARKETPLACE_THEMES: ThemeDefinition[] = [
     id: "midnight-theme",
     name: "Midnight Theme",
     description: "Deep black surfaces with vivid violet actions and soft text.",
-    author: "jamior",
+    author: DEFAULT_THEME_AUTHOR,
     tags: ["midnight", "purple", "high contrast"],
-    downloads: 1388,
+    downloads: 0,
     updated: "12/23/2024",
     rating: 4.1,
     source: "marketplace",
@@ -198,9 +199,9 @@ const MARKETPLACE_THEMES: ThemeDefinition[] = [
     id: "discord-dark-mode",
     name: "Discord Dark Mode",
     description: "Familiar graphite panels with bright blurple accents.",
-    author: "inchworm3399",
+    author: DEFAULT_THEME_AUTHOR,
     tags: ["discord", "dark mode", "blue"],
-    downloads: 1091,
+    downloads: 0,
     updated: "1/20/2025",
     rating: 4.1,
     source: "marketplace",
@@ -225,9 +226,9 @@ const MARKETPLACE_THEMES: ThemeDefinition[] = [
     id: "crimson-moon",
     name: "Crimson Moon",
     description: "A red command-room theme with warm contrast.",
-    author: "inchworm3399",
+    author: DEFAULT_THEME_AUTHOR,
     tags: ["discord", "crimson", "red"],
-    downloads: 498,
+    downloads: 0,
     updated: "1/7/2025",
     rating: 5,
     source: "marketplace",
@@ -252,9 +253,9 @@ const MARKETPLACE_THEMES: ThemeDefinition[] = [
     id: "civic-blue",
     name: "Civic Blue",
     description: "Calm navy, bright cyan, and tidy operational surfaces.",
-    author: "northline",
+    author: DEFAULT_THEME_AUTHOR,
     tags: ["blue", "operations", "clean"],
-    downloads: 812,
+    downloads: 0,
     updated: "4/18/2026",
     rating: 4.7,
     source: "marketplace",
@@ -279,9 +280,9 @@ const MARKETPLACE_THEMES: ThemeDefinition[] = [
     id: "ember-terminal",
     name: "Ember Terminal",
     description: "Dark charcoal, amber highlights, and strong danger states.",
-    author: "dispatchlabs",
+    author: DEFAULT_THEME_AUTHOR,
     tags: ["terminal", "amber", "contrast"],
-    downloads: 647,
+    downloads: 0,
     updated: "2/14/2026",
     rating: 4.5,
     source: "marketplace",
@@ -977,7 +978,7 @@ export default function Dashboard() {
         <div className="content-grid">
           {active === "overview" && <Overview data={data} />}
           {active === "moderation" && <Moderation can={can} />}
-          {active === "staff" && <Staff />}
+          {active === "staff" && <Staff can={can} />}
           {active === "erlc" && <Erlc data={data} />}
           {active === "partnerships" && <Partnerships channels={data.channels} />}
           {active === "embeds" && <Embeds channels={data.channels} />}
@@ -1192,7 +1193,7 @@ function ThemeCard({
       <div className="theme-card-body">
         <div>
           <h2>{theme.name}</h2>
-          <p>by {theme.author}</p>
+          <p>Created by {theme.author}</p>
         </div>
         <span className="theme-rating">
           <Star size={14} fill="currentColor" />
@@ -1588,28 +1589,60 @@ function Overview({ data }: { data: DashboardData }) {
 
 function Moderation({ can }: { can: (key: string) => boolean }) {
   return (
-    <Panel title="Moderation" index={["Warn", "Kick / Ban", "Timeouts", "Infractions"]}>
+    <Panel title="Moderation" index={["Warn", "Kick / Ban", "Timeouts"]}>
       {can("moderation") && (
         <div className="two-col">
           {["warn", "kick", "ban", "unban"].map((action) => (
             <ActionForm action={action} key={action}>
               <h2>{action[0].toUpperCase() + action.slice(1)} User</h2>
-              <input name="target_id" placeholder="User ID" required />
+              <input name="target_id" placeholder="User ID or username" required />
               <textarea name="reason" placeholder="Reason" required />
               <button className="button primary">Submit</button>
             </ActionForm>
           ))}
-          <ActionForm action="mute"><h2>Apply Timeout</h2><input name="target_id" placeholder="User ID" required /><input name="duration" placeholder="10m / 2h / 1d" required /><textarea name="reason" placeholder="Reason" required /><button className="button primary">Apply Timeout</button></ActionForm>
-          <ActionForm action="unmute"><h2>Remove Timeout</h2><input name="target_id" placeholder="User ID" required /><textarea name="reason" placeholder="Reason" required /><button className="button primary">Remove Timeout</button></ActionForm>
+          <ActionForm action="mute"><h2>Apply Timeout</h2><input name="target_id" placeholder="User ID or username" required /><input name="duration" placeholder="10m / 2h / 1d" required /><textarea name="reason" placeholder="Reason" required /><button className="button primary">Apply Timeout</button></ActionForm>
+          <ActionForm action="unmute"><h2>Remove Timeout</h2><input name="target_id" placeholder="User ID or username" required /><textarea name="reason" placeholder="Reason" required /><button className="button primary">Remove Timeout</button></ActionForm>
         </div>
       )}
-      {can("infractions") && <ActionForm action="infract"><h2>Infract User</h2><input name="target_id" placeholder="User ID" required /><input name="punishment" placeholder="Punishment" required /><textarea name="reason" placeholder="Reason" required /><button className="button primary">Create Infraction</button></ActionForm>}
     </Panel>
   );
 }
 
-function Staff() {
-  return <Panel title="Staff Management" index={["Retire", "Reinstate"]}><div className="two-col"><ActionForm action="retire"><h2>Retire Staff Member</h2><input name="target_id" placeholder="User ID" required /><button className="button primary">Retire</button></ActionForm><ActionForm action="reinstate"><h2>Reinstate Staff Member</h2><input name="target_id" placeholder="User ID" required /><button className="button primary">Reinstate</button></ActionForm></div></Panel>;
+function Staff({ can }: { can: (key: string) => boolean }) {
+  const index = [
+    ...(can("infractions") ? ["Infractions"] : []),
+    ...(can("staff_management") ? ["Retire", "Reinstate"] : [])
+  ];
+
+  return (
+    <Panel title="Staff Management" index={index}>
+      <div className="two-col">
+        {can("infractions") && (
+          <ActionForm action="infract">
+            <h2>Infract User</h2>
+            <input name="target_id" placeholder="User ID or username" required />
+            <input name="punishment" placeholder="Punishment" required />
+            <textarea name="reason" placeholder="Reason" required />
+            <button className="button primary">Create Infraction</button>
+          </ActionForm>
+        )}
+        {can("staff_management") && (
+          <>
+            <ActionForm action="retire">
+              <h2>Retire Staff Member</h2>
+              <input name="target_id" placeholder="User ID or username" required />
+              <button className="button primary">Retire</button>
+            </ActionForm>
+            <ActionForm action="reinstate">
+              <h2>Reinstate Staff Member</h2>
+              <input name="target_id" placeholder="User ID or username" required />
+              <button className="button primary">Reinstate</button>
+            </ActionForm>
+          </>
+        )}
+      </div>
+    </Panel>
+  );
 }
 
 function Erlc({ data }: { data: DashboardData }) {
@@ -1625,11 +1658,11 @@ function Embeds({ channels }: { channels: Channel[] }) {
 }
 
 function Modlogs({ data }: { data: DashboardData }) {
-  return <Panel title="Modlogs" index={["Lookup", "Clear", "Results"]}><div className="two-col"><form className="setting-card form-grid" method="get" action="/dashboard"><h2>Lookup User Logs</h2><input name="modlog_user_id" placeholder="User ID" defaultValue={data.modlog_user_id} /><button className="button primary">View Logs</button></form><ActionForm action="modlogs_clear_user"><h2>Clear User Logs</h2><input name="target_id" placeholder="User ID" required /><button className="button primary">Clear User Logs</button></ActionForm></div><ActionForm action="modlogs_clear_all" danger><h2>Clear All Modlogs</h2><button className="button danger">Clear Everything</button></ActionForm>{data.modlog_results && <article className="setting-card"><h2>Results for {data.modlog_user_id}</h2><div className="list-grid">{data.modlog_results.length ? data.modlog_results.map((log, index) => <div className="list-item" key={index}>{log.action}<span>Case #{log.case_id} | {log.reason}</span></div>) : <div className="list-item">No modlogs found.</div>}</div></article>}</Panel>;
+  return <Panel title="Modlogs" index={["Lookup", "Clear", "Results"]}><div className="two-col"><form className="setting-card form-grid" method="get" action="/dashboard"><h2>Lookup User Logs</h2><input name="modlog_user_id" placeholder="User ID or username" defaultValue={data.modlog_user_id} /><button className="button primary">View Logs</button></form><ActionForm action="modlogs_clear_user"><h2>Clear User Logs</h2><input name="target_id" placeholder="User ID or username" required /><button className="button primary">Clear User Logs</button></ActionForm></div><ActionForm action="modlogs_clear_all" danger><h2>Clear All Modlogs</h2><button className="button danger">Clear Everything</button></ActionForm>{data.modlog_results && <article className="setting-card"><h2>Results for {data.modlog_user_id}</h2><div className="list-grid">{data.modlog_results.length ? data.modlog_results.map((log, index) => <div className="list-item" key={index}>{log.action}<span>Case #{log.case_id} | {log.reason}</span></div>) : <div className="list-item">No modlogs found.</div>}</div></article>}</Panel>;
 }
 
 function Blacklist() {
-  return <Panel title="Command Blacklist" index={["Add", "Remove"]}><div className="two-col"><ActionForm action="blacklist_add"><h2>Add User</h2><input name="target_id" placeholder="User ID" required /><button className="button primary">Blacklist</button></ActionForm><ActionForm action="blacklist_remove"><h2>Remove User</h2><input name="target_id" placeholder="User ID" required /><button className="button primary">Remove</button></ActionForm></div></Panel>;
+  return <Panel title="Command Blacklist" index={["Add", "Remove"]}><div className="two-col"><ActionForm action="blacklist_add"><h2>Add User</h2><input name="target_id" placeholder="User ID or username" required /><button className="button primary">Blacklist</button></ActionForm><ActionForm action="blacklist_remove"><h2>Remove User</h2><input name="target_id" placeholder="User ID or username" required /><button className="button primary">Remove</button></ActionForm></div></Panel>;
 }
 
 function Docker() {

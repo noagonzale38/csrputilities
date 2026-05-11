@@ -26,14 +26,16 @@ THEME_COLOR_KEYS = [
     "destructive",
 ]
 
+DEFAULT_THEME_AUTHOR = "CSRP Utilities"
+
 SEED_THEMES = [
     {
         "id": "csrp-default",
         "name": "CSRP Default",
         "description": "A clean emerald control panel for day-to-day staff work.",
-        "author": "CSRP Utilities",
+        "author": DEFAULT_THEME_AUTHOR,
         "tags": ["default", "staff", "green"],
-        "downloads": 2194,
+        "downloads": 0,
         "updated_at": "2026-05-10T00:00:00",
         "rating": 4.8,
         "colors": {
@@ -57,9 +59,9 @@ SEED_THEMES = [
         "id": "midnight-theme",
         "name": "Midnight Theme",
         "description": "Deep black surfaces with vivid violet actions and soft text.",
-        "author": "jamior",
+        "author": DEFAULT_THEME_AUTHOR,
         "tags": ["midnight", "purple", "high contrast"],
-        "downloads": 1388,
+        "downloads": 0,
         "updated_at": "2024-12-23T00:00:00",
         "rating": 4.1,
         "colors": {
@@ -83,9 +85,9 @@ SEED_THEMES = [
         "id": "discord-dark-mode",
         "name": "Discord Dark Mode",
         "description": "Familiar graphite panels with bright blurple accents.",
-        "author": "inchworm3399",
+        "author": DEFAULT_THEME_AUTHOR,
         "tags": ["discord", "dark mode", "blue"],
-        "downloads": 1091,
+        "downloads": 0,
         "updated_at": "2025-01-20T00:00:00",
         "rating": 4.1,
         "colors": {
@@ -109,9 +111,9 @@ SEED_THEMES = [
         "id": "crimson-moon",
         "name": "Crimson Moon",
         "description": "A red command-room theme with warm contrast.",
-        "author": "inchworm3399",
+        "author": DEFAULT_THEME_AUTHOR,
         "tags": ["discord", "crimson", "red"],
-        "downloads": 498,
+        "downloads": 0,
         "updated_at": "2025-01-07T00:00:00",
         "rating": 5,
         "colors": {
@@ -135,9 +137,9 @@ SEED_THEMES = [
         "id": "civic-blue",
         "name": "Civic Blue",
         "description": "Calm navy, bright cyan, and tidy operational surfaces.",
-        "author": "northline",
+        "author": DEFAULT_THEME_AUTHOR,
         "tags": ["blue", "operations", "clean"],
-        "downloads": 812,
+        "downloads": 0,
         "updated_at": "2026-04-18T00:00:00",
         "rating": 4.7,
         "colors": {
@@ -161,9 +163,9 @@ SEED_THEMES = [
         "id": "ember-terminal",
         "name": "Ember Terminal",
         "description": "Dark charcoal, amber highlights, and strong danger states.",
-        "author": "dispatchlabs",
+        "author": DEFAULT_THEME_AUTHOR,
         "tags": ["terminal", "amber", "contrast"],
-        "downloads": 647,
+        "downloads": 0,
         "updated_at": "2026-02-14T00:00:00",
         "rating": 4.5,
         "colors": {
@@ -202,6 +204,30 @@ def _format_date(value: str):
         return f"{parsed.month}/{parsed.day}/{parsed.year}"
     except (TypeError, ValueError):
         return value
+
+
+def _refresh_download_counts(connection: sqlite3.Connection, theme_id: str | None = None):
+    statement = """
+        UPDATE themes
+        SET downloads = (
+            SELECT COUNT(*)
+            FROM theme_installs
+            WHERE theme_installs.theme_id = themes.id
+                AND (themes.author_id IS NULL OR theme_installs.user_id != themes.author_id)
+        )
+    """
+    if theme_id is None:
+        connection.execute(statement)
+    else:
+        connection.execute(f"{statement} WHERE id = ?", (theme_id,))
+
+
+def _sync_seed_theme_metadata(connection: sqlite3.Connection):
+    connection.executemany(
+        "UPDATE themes SET author_id = NULL, author_name = ? WHERE id = ?",
+        [(DEFAULT_THEME_AUTHOR, theme["id"]) for theme in SEED_THEMES],
+    )
+    _refresh_download_counts(connection)
 
 
 def init_theme_store():
@@ -269,6 +295,7 @@ def init_theme_store():
                     theme["updated_at"],
                 ),
             )
+        _sync_seed_theme_metadata(connection)
         connection.commit()
 
 
@@ -334,16 +361,11 @@ def install_theme(user_id: str, theme_id: str):
         theme = connection.execute("SELECT * FROM themes WHERE id = ? AND is_public = 1", (theme_id,)).fetchone()
         if theme is None:
             return None
-        before = connection.total_changes
         connection.execute(
             "INSERT OR IGNORE INTO theme_installs (user_id, theme_id, installed_at) VALUES (?, ?, ?)",
             (user_id, theme_id, now),
         )
-        if connection.total_changes > before:
-            connection.execute(
-                "UPDATE themes SET downloads = downloads + 1 WHERE id = ?",
-                (theme_id,),
-            )
+        _refresh_download_counts(connection, theme_id)
         connection.commit()
         theme = connection.execute("SELECT * FROM themes WHERE id = ?", (theme_id,)).fetchone()
     return _theme_payload(theme, "custom")
@@ -363,6 +385,7 @@ def uninstall_theme(user_id: str, theme_id: str):
             result = "deleted"
         else:
             connection.execute("DELETE FROM theme_installs WHERE user_id = ? AND theme_id = ?", (user_id, theme_id))
+            _refresh_download_counts(connection, theme_id)
             result = "removed"
         connection.commit()
     return result

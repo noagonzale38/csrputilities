@@ -22,8 +22,8 @@
       </div>
       <nav class="nav-list">
         <a href="#overview">Overview</a>
-        {% if feature_access.moderation or feature_access.infractions %}<a href="#moderation">Moderation</a>{% endif %}
-        {% if feature_access.staff_management %}<a href="#staff">Staff</a>{% endif %}
+        {% if feature_access.moderation %}<a href="#moderation">Moderation</a>{% endif %}
+        {% if feature_access.staff_management or feature_access.infractions %}<a href="#staff">Staff</a>{% endif %}
         {% if feature_access.erlc %}<a href="#erlc">ERLC</a>{% endif %}
         {% if feature_access.partnerships %}<a href="#partnerships">Partnerships</a>{% endif %}
         {% if feature_access.embed_wizard %}<a href="#embeds">Embed Wizard</a>{% endif %}
@@ -67,7 +67,7 @@
         </div>
       </section>
 
-      {% if feature_access.moderation or feature_access.infractions %}
+      {% if feature_access.moderation %}
       <section id="moderation" class="panel">
         <div class="panel-header">
           <div>
@@ -79,74 +79,76 @@
           {% if feature_access.moderation %}
           <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='warn') }}">
             <h3>Warn</h3>
-            <input name="target_id" placeholder="User ID" required>
+            <input name="target_id" placeholder="User ID or username" required>
             <textarea name="reason" placeholder="Reason" required></textarea>
             <button class="button primary" type="submit">Send Warning</button>
           </form>
           <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='kick') }}">
             <h3>Kick</h3>
-            <input name="target_id" placeholder="User ID" required>
+            <input name="target_id" placeholder="User ID or username" required>
             <textarea name="reason" placeholder="Reason" required></textarea>
             <button class="button primary" type="submit">Kick User</button>
           </form>
           <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='ban') }}">
             <h3>Ban</h3>
-            <input name="target_id" placeholder="User ID" required>
+            <input name="target_id" placeholder="User ID or username" required>
             <textarea name="reason" placeholder="Reason" required></textarea>
             <button class="button primary" type="submit">Ban User</button>
           </form>
           <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='unban') }}">
             <h3>Unban</h3>
-            <input name="target_id" placeholder="User ID" required>
+            <input name="target_id" placeholder="User ID or username" required>
             <textarea name="reason" placeholder="Reason" required></textarea>
             <button class="button primary" type="submit">Unban User</button>
           </form>
           <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='mute') }}">
             <h3>Timeout</h3>
-            <input name="target_id" placeholder="User ID" required>
+            <input name="target_id" placeholder="User ID or username" required>
             <input name="duration" placeholder="10m / 2h / 1d" required>
             <textarea name="reason" placeholder="Reason" required></textarea>
             <button class="button primary" type="submit">Apply Timeout</button>
           </form>
           <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='unmute') }}">
             <h3>Remove Timeout</h3>
-            <input name="target_id" placeholder="User ID" required>
+            <input name="target_id" placeholder="User ID or username" required>
             <textarea name="reason" placeholder="Reason" required></textarea>
             <button class="button primary" type="submit">Remove Timeout</button>
-          </form>
-          {% endif %}
-          {% if feature_access.infractions %}
-          <form class="card form-grid accent" method="post" action="{{ url_for('dashboard_action', action='infract') }}">
-            <h3>Infract User</h3>
-            <input name="target_id" placeholder="User ID" required>
-            <input name="punishment" placeholder="Punishment" required>
-            <textarea name="reason" placeholder="Reason" required></textarea>
-            <button class="button primary" type="submit">Create Infraction</button>
           </form>
           {% endif %}
         </div>
       </section>
       {% endif %}
 
-      {% if feature_access.staff_management %}
+      {% if feature_access.staff_management or feature_access.infractions %}
       <section id="staff" class="panel">
         <div class="panel-header">
           <div>
             <p class="eyebrow">Staff</p>
-            <h2>Retire and reinstate</h2>
+            <h2>Infractions and staff status</h2>
           </div>
         </div>
         <div class="two-col">
+          {% if feature_access.infractions %}
+          <form class="card form-grid accent" method="post" action="{{ url_for('dashboard_action', action='infract') }}">
+            <h3>Infract User</h3>
+            <input name="target_id" placeholder="User ID or username" required>
+            <input name="punishment" placeholder="Punishment" required>
+            <textarea name="reason" placeholder="Reason" required></textarea>
+            <button class="button primary" type="submit">Create Infraction</button>
+          </form>
+          {% endif %}
+          {% if feature_access.staff_management %}
           <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='retire') }}">
             <h3>Retire Staff Member</h3>
-            <input name="target_id" placeholder="User ID" required>
+            <input name="target_id" placeholder="User ID or username" required>
             <button class="button primary" type="submit">Retire</button>
           </form>
           <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='reinstate') }}">
             <h3>Reinstate Staff Member</h3>
-            <input name="target_id" placeholder="User ID" required>
+            <input name="target_id" placeholder="User ID or username" required>
             <button class="button primary" type="submit">Reinstate</button>
           </form>
+          {% endif %}
         </div>
       </section>
       {% endif %}
@@ -280,12 +282,12 @@
         <div class="two-col">
           <form class="card form-grid" method="get" action="{{ url_for('dashboard') }}">
             <h3>Lookup User Logs</h3>
-            <input name="modlog_user_id" placeholder="User ID" value="{{ modlog_user_id }}">
+            <input name="modlog_user_id" placeholder="User ID or username" value="{{ modlog_user_id }}">
             <button class="button primary" type="submit">View Logs</button>
           </form>
           <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='modlogs_clear_user') }}">
             <h3>Clear User Logs</h3>
-            <input name="target_id" placeholder="User ID" required>
+            <input name="target_id" placeholder="User ID or username" required>
             <button class="button primary" type="submit">Clear User Logs</button>
           </form>
         </div>
@@ -321,12 +323,12 @@
         <div class="two-col">
           <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='blacklist_add') }}">
             <h3>Add User</h3>
-            <input name="target_id" placeholder="User ID" required>
+            <input name="target_id" placeholder="User ID or username" required>
             <button class="button primary" type="submit">Blacklist</button>
           </form>
           <form class="card form-grid" method="post" action="{{ url_for('dashboard_action', action='blacklist_remove') }}">
             <h3>Remove User</h3>
-            <input name="target_id" placeholder="User ID" required>
+            <input name="target_id" placeholder="User ID or username" required>
             <button class="button primary" type="submit">Remove Blacklist</button>
           </form>
         </div>

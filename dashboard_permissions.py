@@ -8,8 +8,8 @@ PERMISSIONS_FILE = "dashboard_permissions.json"
 
 FEATURES = [
     ("moderation", "Moderation Commands"),
-    ("infractions", "Infractions"),
     ("staff_management", "Retire / Reinstate"),
+    ("infractions", "Infractions"),
     ("erlc", "ERLC Controls"),
     ("partnerships", "Partnerships"),
     ("modlogs", "Modlogs"),

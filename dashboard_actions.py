@@ -61,6 +61,137 @@ def _save_lines(path: str, lines: list[str]) -> None:
         file.write("\n".join(lines) + ("\n" if lines else ""))
 
 
+def _parse_discord_user_id(identifier: Any) -> int | None:
+    if isinstance(identifier, int):
+        return identifier
+
+    raw_identifier = str(identifier or "").strip()
+    mention_match = re.fullmatch(r"<@!?(\d+)>", raw_identifier)
+    if mention_match:
+        return int(mention_match.group(1))
+    if raw_identifier.isdigit():
+        return int(raw_identifier)
+    return None
+
+
+def _normalize_user_lookup(identifier: Any) -> str:
+    return re.sub(r"\s+", " ", str(identifier or "").strip().lstrip("@")).casefold()
+
+
+def _user_name_candidates(user) -> list[str]:
+    candidates = [
+        getattr(user, "name", ""),
+        getattr(user, "display_name", ""),
+        getattr(user, "global_name", ""),
+        getattr(user, "nick", ""),
+    ]
+    name = getattr(user, "name", "")
+    discriminator = getattr(user, "discriminator", "")
+    if name and discriminator and discriminator != "0":
+        candidates.append(f"{name}#{discriminator}")
+
+    return [candidate for candidate in candidates if candidate]
+
+
+def _user_matches_lookup(user, normalized_lookup: str) -> bool:
+    return any(_normalize_user_lookup(candidate) == normalized_lookup for candidate in _user_name_candidates(user))
+
+
+async def _find_member_by_name(guild: discord.Guild, identifier: Any) -> discord.Member | None:
+    raw_identifier = str(identifier or "").strip().lstrip("@")
+    normalized_lookup = _normalize_user_lookup(raw_identifier)
+    if not normalized_lookup:
+        return None
+
+    for member in guild.members:
+        if _user_matches_lookup(member, normalized_lookup):
+            return member
+
+    named_member = guild.get_member_named(raw_identifier)
+    if named_member is not None:
+        return named_member
+
+    try:
+        matches = await guild.query_members(raw_identifier, limit=25)
+    except (AttributeError, discord.HTTPException, discord.Forbidden):
+        matches = []
+
+    exact_matches = [member for member in matches if _user_matches_lookup(member, normalized_lookup)]
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    return None
+
+
+async def _find_banned_user_by_name(guild: discord.Guild, identifier: Any):
+    raw_identifier = str(identifier or "").strip().lstrip("@")
+    normalized_lookup = _normalize_user_lookup(raw_identifier)
+    if not normalized_lookup:
+        return None
+
+    try:
+        try:
+            bans = guild.bans(limit=None)
+        except TypeError:
+            bans = guild.bans()
+
+        if hasattr(bans, "__aiter__"):
+            async for ban_entry in bans:
+                if _user_matches_lookup(ban_entry.user, normalized_lookup):
+                    return ban_entry.user
+        else:
+            for ban_entry in await bans:
+                if _user_matches_lookup(ban_entry.user, normalized_lookup):
+                    return ban_entry.user
+    except (AttributeError, TypeError, discord.HTTPException, discord.Forbidden):
+        return None
+    return None
+
+
+async def resolve_member(bot, user_identifier: Any) -> discord.Member:
+    guild = await get_target_guild(bot)
+    user_id = _parse_discord_user_id(user_identifier)
+    if user_id is not None:
+        member = guild.get_member(user_id)
+        if member is not None:
+            return member
+        try:
+            return await guild.fetch_member(user_id)
+        except discord.NotFound as exc:
+            raise RuntimeError(f"Could not find a server member with ID {user_id}.") from exc
+
+    member = await _find_member_by_name(guild, user_identifier)
+    if member is None:
+        raise RuntimeError(f"Could not find a server member matching '{str(user_identifier).strip()}'. Try their Discord user ID.")
+    return member
+
+
+async def resolve_user(bot, user_identifier: Any):
+    guild = await get_target_guild(bot)
+    user_id = _parse_discord_user_id(user_identifier)
+    if user_id is not None:
+        member = guild.get_member(user_id)
+        if member is not None:
+            return member
+        try:
+            return await bot.fetch_user(user_id)
+        except discord.NotFound as exc:
+            raise RuntimeError(f"Could not find a Discord user with ID {user_id}.") from exc
+
+    member = await _find_member_by_name(guild, user_identifier)
+    if member is not None:
+        return member
+
+    banned_user = await _find_banned_user_by_name(guild, user_identifier)
+    if banned_user is not None:
+        return banned_user
+
+    raise RuntimeError(f"Could not find a Discord user matching '{str(user_identifier).strip()}'. Try their Discord user ID.")
+
+
+async def resolve_user_id(bot, user_identifier: Any) -> int:
+    return int((await resolve_user(bot, user_identifier)).id)
+
+
 async def get_target_guild(bot) -> discord.Guild:
     guild = bot.get_guild(DEFAULT_GUILD_ID)
     if guild is None:
@@ -68,12 +199,8 @@ async def get_target_guild(bot) -> discord.Guild:
     return guild
 
 
-async def get_member(bot, user_id: int) -> discord.Member:
-    guild = await get_target_guild(bot)
-    member = guild.get_member(int(user_id))
-    if member is None:
-        member = await guild.fetch_member(int(user_id))
-    return member
+async def get_member(bot, user_id: Any) -> discord.Member:
+    return await resolve_member(bot, user_id)
 
 
 async def get_actor_member(bot, actor_id: int) -> discord.Member:
