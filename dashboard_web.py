@@ -141,6 +141,14 @@ def run_async(coro, timeout=30):
     return future.result(timeout=timeout)
 
 
+def _wants_json_response():
+    if not has_request_context():
+        return False
+    accept_header = request.headers.get("Accept", "")
+    requested_with = request.headers.get("X-Requested-With", "")
+    return "application/json" in accept_header or requested_with in {"fetch", "XMLHttpRequest"}
+
+
 def check_server_status():
     return "up" if os.path.exists(LOG_FILE) else "down"
 
@@ -232,13 +240,13 @@ def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
         if not session.get("discord_user_id"):
-            if request.path.startswith("/api/"):
+            if request.path.startswith("/api/") or _wants_json_response():
                 return jsonify({"error": "Authentication required."}), 401
             return redirect(url_for("login"))
         member = current_member()
         if member is None:
             session.clear()
-            if request.path.startswith("/api/"):
+            if request.path.startswith("/api/") or _wants_json_response():
                 return jsonify({"error": "Authentication required."}), 401
             flash("Your Discord account is not in the configured server.", "error")
             return redirect(url_for("index"))
@@ -560,6 +568,21 @@ def dashboard_action(action):
     bot = get_bot()
     actor_id = member.id
 
+    def action_response(message=None, error=None, status=200):
+        if _wants_json_response():
+            payload = {"ok": error is None}
+            if message is not None:
+                payload["message"] = message
+            if error is not None:
+                payload["error"] = error
+            return jsonify(payload), status
+
+        if error is not None:
+            flash(error, "error")
+        elif message is not None:
+            flash(message, "success")
+        return redirect(url_for("dashboard", modlog_user_id=request.args.get("modlog_user_id", "")))
+
     def target_id(field_name="target_id"):
         return run_async(resolve_user_id(bot, request.form[field_name]))
 
@@ -617,23 +640,20 @@ def dashboard_action(action):
     }
 
     if action not in handlers:
-        flash("Unknown dashboard action.", "error")
-        return redirect(url_for("dashboard"))
+        return action_response(error="Unknown dashboard action.", status=404)
 
     feature_key, handler = handlers[action]
     if not member_has_access([role.id for role in member.roles], feature_key):
-        flash("You do not have access to that dashboard feature.", "error")
-        return redirect(url_for("dashboard"))
+        return action_response(error="You do not have access to that dashboard feature.", status=403)
 
     try:
         result = handler()
         if action == "docker_exec":
-            flash(result[:500], "success")
+            return action_response(message=result[:500])
         else:
-            flash(result, "success")
+            return action_response(message=result)
     except Exception as exc:
-        flash(str(exc), "error")
-    return redirect(url_for("dashboard", modlog_user_id=request.args.get("modlog_user_id", "")))
+        return action_response(error=str(exc), status=400)
 
 
 def _save_access_assignments():

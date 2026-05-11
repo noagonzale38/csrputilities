@@ -31,7 +31,7 @@ import {
   UserMinus,
   Users
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type Role = { id: string; name: string; position: number; color: string };
 type Channel = { id: string; name: string; position: number };
@@ -85,6 +85,39 @@ type DashboardData = {
   modlog_results: Record<string, any>[] | null;
   modlog_user_id: string;
   rank_order: string[];
+};
+type ToastKind = "success" | "error";
+type DashboardToast = {
+  id: number;
+  kind: ToastKind;
+  message: string;
+};
+
+const DASHBOARD_TOAST_EVENT = "csrp-dashboard-toast";
+const DASHBOARD_DATA_REFRESH_EVENT = "csrp-dashboard-refresh";
+
+const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
+  warn: "User Warned Successfully.",
+  kick: "User Kicked Successfully.",
+  ban: "User Banned Successfully.",
+  unban: "User Unbanned Successfully.",
+  mute: "Timeout Applied Successfully.",
+  unmute: "Timeout Removed Successfully.",
+  infract: "User Infracted Successfully.",
+  retire: "Staff Member Retired Successfully.",
+  reinstate: "Staff Member Reinstated Successfully.",
+  erlc_command: "Command Executed Successfully.",
+  partnership: "Partnership Sent Successfully.",
+  modlogs_clear_user: "User Modlogs Cleared Successfully.",
+  modlogs_clear_all: "All Modlogs Cleared Successfully.",
+  embed_send: "Embed Sent Successfully.",
+  blacklist_add: "User Blacklisted Successfully.",
+  blacklist_remove: "User Removed From Blacklist.",
+  docker_exec: "Database Command Executed Successfully.",
+  bot_status: "Bot Status Updated Successfully.",
+  bot_message: "Bot Message Sent Successfully.",
+  settings_save: "Bot Settings Saved Successfully.",
+  access_save: "Access Rules Saved Successfully."
 };
 
 const navigation = [
@@ -470,23 +503,49 @@ function buildCustomTheme(draft: ThemeDraft): ThemeDefinition {
   };
 }
 
+function emitDashboardToast(kind: ToastKind, message: string) {
+  window.dispatchEvent(
+    new CustomEvent(DASHBOARD_TOAST_EVENT, {
+      detail: { kind, message }
+    })
+  );
+}
+
 function useDashboardData() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    const query = window.location.search;
-    fetch(`/api/dashboard${query}`, { credentials: "include" })
-      .then((response) => {
-        if (response.redirected || response.status === 401) {
-          window.location.href = "/";
-          return null;
-        }
-        if (!response.ok) throw new Error("Unable to load dashboard data.");
-        return response.json();
-      })
-      .then((payload) => payload && setData(payload))
-      .catch((err) => setError(err.message));
+    let cancelled = false;
+
+    const loadDashboardData = () => {
+      const query = window.location.search;
+      fetch(`/api/dashboard${query}`, { credentials: "include" })
+        .then((response) => {
+          if (response.redirected || response.status === 401) {
+            window.location.href = "/";
+            return null;
+          }
+          if (!response.ok) throw new Error("Unable to load dashboard data.");
+          return response.json();
+        })
+        .then((payload) => {
+          if (!cancelled && payload) {
+            setData(payload);
+            setError("");
+          }
+        })
+        .catch((err) => {
+          if (!cancelled) setError(err.message);
+        });
+    };
+
+    loadDashboardData();
+    window.addEventListener(DASHBOARD_DATA_REFRESH_EVENT, loadDashboardData);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(DASHBOARD_DATA_REFRESH_EVENT, loadDashboardData);
+    };
   }, []);
 
   return { data, error };
@@ -645,11 +704,116 @@ function ChannelSelect({ name, channels, selected }: { name: string; channels: C
   );
 }
 
-function ActionForm({ action, children, danger = false }: { action: string; children: React.ReactNode; danger?: boolean }) {
+function DashboardPostForm({
+  action,
+  children,
+  className
+}: {
+  action: string;
+  children: React.ReactNode;
+  className: string;
+}) {
+  const [submitting, setSubmitting] = useState(false);
+
+  const submitAction = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (submitting) return;
+
+    const form = event.currentTarget;
+    setSubmitting(true);
+
+    try {
+      const response = await fetch(form.action, {
+        method: "POST",
+        body: new FormData(form),
+        credentials: "include",
+        headers: {
+          Accept: "application/json",
+          "X-Requested-With": "fetch"
+        }
+      });
+      const contentType = response.headers.get("content-type") || "";
+      const payload = contentType.includes("application/json") ? await response.json() : null;
+
+      if (response.redirected || response.status === 401) {
+        window.location.href = "/";
+        return;
+      }
+
+      if (!response.ok || payload?.ok === false) {
+        throw new Error(payload?.error || payload?.message || "Action failed.");
+      }
+
+      emitDashboardToast("success", ACTION_SUCCESS_MESSAGES[action] || payload?.message || "Action Completed Successfully.");
+      window.dispatchEvent(new Event(DASHBOARD_DATA_REFRESH_EVENT));
+    } catch (err) {
+      emitDashboardToast("error", err instanceof Error ? err.message : "Action failed.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return (
-    <form className={`setting-card form-grid ${danger ? "danger-card" : ""}`} method="post" action={`/api/actions/${action}`}>
+    <form className={className} method="post" action={`/api/actions/${action}`} onSubmit={submitAction} aria-busy={submitting}>
       {children}
     </form>
+  );
+}
+
+function ActionForm({ action, children, danger = false }: { action: string; children: React.ReactNode; danger?: boolean }) {
+  return (
+    <DashboardPostForm action={action} className={`setting-card form-grid ${danger ? "danger-card" : ""}`}>
+      {children}
+    </DashboardPostForm>
+  );
+}
+
+function ToastViewport() {
+  const [toasts, setToasts] = useState<DashboardToast[]>([]);
+
+  useEffect(() => {
+    const timers = new Map<number, number>();
+
+    const dismiss = (id: number) => {
+      window.clearTimeout(timers.get(id));
+      timers.delete(id);
+      setToasts((current) => current.filter((toast) => toast.id !== id));
+    };
+
+    const showToast = (event: Event) => {
+      const detail = (event as CustomEvent<{ kind: ToastKind; message: string }>).detail;
+      const id = Date.now() + Math.floor(Math.random() * 1000);
+      const toast = {
+        id,
+        kind: detail?.kind || "success",
+        message: detail?.message || "Action Completed Successfully."
+      };
+
+      setToasts((current) => [...current.slice(-3), toast]);
+      timers.set(id, window.setTimeout(() => dismiss(id), 4200));
+    };
+
+    window.addEventListener(DASHBOARD_TOAST_EVENT, showToast);
+    return () => {
+      window.removeEventListener(DASHBOARD_TOAST_EVENT, showToast);
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, []);
+
+  if (!toasts.length) return null;
+
+  return (
+    <div className="toast-stack" aria-live="polite" aria-label="Dashboard notifications">
+      {toasts.map((toast) => (
+        <div className={`toast ${toast.kind}`} key={toast.id} role={toast.kind === "error" ? "alert" : "status"}>
+          {toast.kind === "success" ? <Check size={18} /> : <X size={18} />}
+          <span>{toast.message}</span>
+          <button type="button" aria-label="Dismiss notification" onClick={() => setToasts((current) => current.filter((item) => item.id !== toast.id))}>
+            <X size={14} />
+          </button>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -916,6 +1080,7 @@ export default function Dashboard() {
 
   return (
     <main className="app-shell" style={shellStyle}>
+      <ToastViewport />
       <aside className="rail" aria-label="Dashboard navigation">
         <a className="rail-brand" href="/dashboard" aria-label={`${data.guild.name} dashboard`}>
           <div className="guild-badge">{data.guild.icon_url ? <img src={data.guild.icon_url} alt="" /> : data.guild.name.slice(0, 2)}</div>
@@ -1673,11 +1838,11 @@ function BotUpdates({ channels }: { channels: Channel[] }) {
 }
 
 function BotSettings({ data }: { data: DashboardData }) {
-  return <Panel title="Basic Settings" index={["Staff Roles", "Channels", "Feedback", "Rank Roles"]}><form className="card-stack" method="post" action="/api/actions/settings_save"><article className="setting-card"><h2>Staff Roles</h2><p>{roleNames(data.settings.staff_roles, data.roles).join(", ") || "No staff roles selected"}</p><RoleSelect name="staff_roles" roles={data.roles} selected={data.settings.staff_roles} /></article><article className="setting-card"><h2>Feature Roles</h2><label>Partnerships</label><RoleSelect name="partnership_allowed_roles" roles={data.roles} selected={data.settings.partnership_allowed_roles} /><label>Embed Creation</label><RoleSelect name="embed_allowed_roles" roles={data.roles} selected={data.settings.embed_allowed_roles} /><label>Retire / Reinstate</label><RoleSelect name="retire_allowed_roles" roles={data.roles} selected={data.settings.retire_allowed_roles} /></article><article className="setting-card"><h2>Channels</h2><label>Retirement Log Channel</label><ChannelSelect name="retirement_log_channel" channels={data.channels} selected={data.settings.retirement_log_channel} /><label>Staff Feedback Channel</label><ChannelSelect name="staff_feedback_channel" channels={data.channels} selected={data.settings.staff_feedback_channel} /></article><article className="setting-card"><h2>Feedback</h2><label className="switch-line"><input type="checkbox" name="feedback_enabled" defaultChecked={Boolean(data.settings.feedback_enabled)} /><span>Feedback enabled</span></label><textarea name="feedback_questions" defaultValue={(data.settings.feedback_questions || []).join("\n")} /></article><article className="setting-card"><h2>Rank Role Mapping</h2>{data.rank_order.map((rank) => <label key={rank}>{rank}<RoleSelect name={`rank::${rank}`} roles={data.roles} selected={data.settings.rank_roles?.[rank]} multiple={false} /></label>)}</article><button className="button primary">Save Bot Settings</button></form></Panel>;
+  return <Panel title="Basic Settings" index={["Staff Roles", "Channels", "Feedback", "Rank Roles"]}><DashboardPostForm action="settings_save" className="card-stack"><article className="setting-card"><h2>Staff Roles</h2><p>{roleNames(data.settings.staff_roles, data.roles).join(", ") || "No staff roles selected"}</p><RoleSelect name="staff_roles" roles={data.roles} selected={data.settings.staff_roles} /></article><article className="setting-card"><h2>Feature Roles</h2><label>Partnerships</label><RoleSelect name="partnership_allowed_roles" roles={data.roles} selected={data.settings.partnership_allowed_roles} /><label>Embed Creation</label><RoleSelect name="embed_allowed_roles" roles={data.roles} selected={data.settings.embed_allowed_roles} /><label>Retire / Reinstate</label><RoleSelect name="retire_allowed_roles" roles={data.roles} selected={data.settings.retire_allowed_roles} /></article><article className="setting-card"><h2>Channels</h2><label>Retirement Log Channel</label><ChannelSelect name="retirement_log_channel" channels={data.channels} selected={data.settings.retirement_log_channel} /><label>Staff Feedback Channel</label><ChannelSelect name="staff_feedback_channel" channels={data.channels} selected={data.settings.staff_feedback_channel} /></article><article className="setting-card"><h2>Feedback</h2><label className="switch-line"><input type="checkbox" name="feedback_enabled" defaultChecked={Boolean(data.settings.feedback_enabled)} /><span>Feedback enabled</span></label><textarea name="feedback_questions" defaultValue={(data.settings.feedback_questions || []).join("\n")} /></article><article className="setting-card"><h2>Rank Role Mapping</h2>{data.rank_order.map((rank) => <label key={rank}>{rank}<RoleSelect name={`rank::${rank}`} roles={data.roles} selected={data.settings.rank_roles?.[rank]} multiple={false} /></label>)}</article><button className="button primary">Save Bot Settings</button></DashboardPostForm></Panel>;
 }
 
 function AccessManager({ data }: { data: DashboardData }) {
-  return <Panel title="Access Manager" index={["Full Access", "Features"]}><form className="card-stack" method="post" action="/api/actions/access_save"><article className="setting-card"><h2>Full Dashboard Access</h2><RoleSelect name="full_access_roles" roles={data.roles} selected={data.permissions_data.full_access_roles} /></article>{data.features.map((feature) => <article className="setting-card" key={feature.key}><h2>{feature.label}</h2><RoleSelect name={`feature::${feature.key}`} roles={data.roles} selected={data.permissions_data.features[feature.key]} /></article>)}<button className="button primary">Save Access Rules</button></form></Panel>;
+  return <Panel title="Access Manager" index={["Full Access", "Features"]}><DashboardPostForm action="access_save" className="card-stack"><article className="setting-card"><h2>Full Dashboard Access</h2><RoleSelect name="full_access_roles" roles={data.roles} selected={data.permissions_data.full_access_roles} /></article>{data.features.map((feature) => <article className="setting-card" key={feature.key}><h2>{feature.label}</h2><RoleSelect name={`feature::${feature.key}`} roles={data.roles} selected={data.permissions_data.features[feature.key]} /></article>)}<button className="button primary">Save Access Rules</button></DashboardPostForm></Panel>;
 }
 
 function Panel({ title, index, children }: { title: string; index: string[]; children: React.ReactNode }) {
