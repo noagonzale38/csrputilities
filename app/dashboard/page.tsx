@@ -92,9 +92,45 @@ type DashboardToast = {
   kind: ToastKind;
   message: string;
 };
+type EmbedFieldDraft = {
+  id: number;
+  name: string;
+  value: string;
+  inline: boolean;
+};
+type EmbedDraft = {
+  content: string;
+  title: string;
+  description: string;
+  color: string;
+  url: string;
+  authorName: string;
+  authorUrl: string;
+  authorIconUrl: string;
+  thumbnailUrl: string;
+  imageUrl: string;
+  footerText: string;
+  footerIconUrl: string;
+  timestamp: boolean;
+};
 
 const DASHBOARD_TOAST_EVENT = "csrp-dashboard-toast";
 const DASHBOARD_DATA_REFRESH_EVENT = "csrp-dashboard-refresh";
+const DEFAULT_EMBED_DRAFT: EmbedDraft = {
+  content: "",
+  title: "Announcement",
+  description: "Write your embed content here.",
+  color: "#5865f2",
+  url: "",
+  authorName: "",
+  authorUrl: "",
+  authorIconUrl: "",
+  thumbnailUrl: "",
+  imageUrl: "",
+  footerText: "CSRP Utilities",
+  footerIconUrl: "",
+  timestamp: false
+};
 
 const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   warn: "User Warned Successfully.",
@@ -554,6 +590,26 @@ function useDashboardData() {
 function fieldValue(value: unknown) {
   if (value === null || value === undefined || value === "") return "Not set";
   return String(value);
+}
+
+function embedFieldsPayload(fields: EmbedFieldDraft[]) {
+  return fields
+    .filter((field) => field.name.trim() && field.value.trim())
+    .map((field) => `${field.name.trim()} | ${field.value.trim().replace(/\n/g, "\\n")} | ${field.inline ? "true" : "false"}`)
+    .join("\n");
+}
+
+function safeEmbedColor(value: string) {
+  return /^#[0-9a-f]{6}$/i.test(value) ? value : "#5865f2";
+}
+
+function previewLines(value: string) {
+  return value.split("\n").map((line, index) => (
+    <span key={index}>
+      {line || "\u00a0"}
+      {index < value.split("\n").length - 1 && <br />}
+    </span>
+  ));
 }
 
 function roleNames(ids: unknown, roles: Role[]) {
@@ -1130,7 +1186,7 @@ export default function Dashboard() {
           </div>
           <div className="top-actions">
             <button className="button ghost" onClick={() => window.location.reload()}><RefreshCw size={16} />Refresh</button>
-            <a className="button ghost" href="#settings"><SlidersHorizontal size={16} />Settings</a>
+            <button className="button ghost" onClick={() => setActive("settings")} disabled={!can("bot_settings")}><SlidersHorizontal size={16} />Settings</button>
           </div>
         </header>
 
@@ -1818,7 +1874,144 @@ function Partnerships({ channels }: { channels: Channel[] }) {
 }
 
 function Embeds({ channels }: { channels: Channel[] }) {
-  return <Panel title="Embed Wizard" index={["Channel", "Content", "Style", "Media"]}><ActionForm action="embed_send"><h2>Build Embed</h2><ChannelSelect name="channel_id" channels={channels} /><textarea name="content" placeholder="Optional text above the embed" /><input name="title" placeholder="Embed title" /><textarea name="description" placeholder="Embed description" /><textarea name="fields" placeholder={"Name | Value | inline\nRules | Be respectful | true"} /><input name="color" defaultValue="#5865f2" /><input name="url" placeholder="https://example.com" /><input name="thumbnail_url" placeholder="Thumbnail URL" /><input name="image_url" placeholder="Image URL" /><button className="button primary">Send Embed</button></ActionForm></Panel>;
+  const [draft, setDraft] = useState<EmbedDraft>(DEFAULT_EMBED_DRAFT);
+  const [fields, setFields] = useState<EmbedFieldDraft[]>([
+    { id: 1, name: "Rules", value: "Be respectful and follow staff directions.", inline: false }
+  ]);
+  const visibleFields = fields.filter((field) => field.name.trim() || field.value.trim());
+  const updateDraft = (key: keyof EmbedDraft, value: string | boolean) => {
+    setDraft((current) => ({ ...current, [key]: value }));
+  };
+  const updateField = (id: number, patch: Partial<EmbedFieldDraft>) => {
+    setFields((current) => current.map((field) => (field.id === id ? { ...field, ...patch } : field)));
+  };
+  const addField = () => {
+    setFields((current) =>
+      current.length >= 25 ? current : [...current, { id: Date.now(), name: "", value: "", inline: false }]
+    );
+  };
+  const removeField = (id: number) => {
+    setFields((current) => current.filter((field) => field.id !== id));
+  };
+
+  return (
+    <Panel title="Embed Wizard" index={["Preview", "Message", "Author", "Fields", "Media"]}>
+      <DashboardPostForm action="embed_send" className="embed-builder">
+        <section className="embed-editor">
+          <div className="embed-editor-section">
+            <h2>Destination</h2>
+            <ChannelSelect name="channel_id" channels={channels} />
+          </div>
+
+          <div className="embed-editor-section">
+            <h2>Message</h2>
+            <textarea name="content" value={draft.content} onChange={(event) => updateDraft("content", event.target.value)} placeholder="Message above the embed" />
+            <input name="title" value={draft.title} onChange={(event) => updateDraft("title", event.target.value)} placeholder="Embed title" />
+            <textarea name="description" value={draft.description} onChange={(event) => updateDraft("description", event.target.value)} placeholder="Embed description" />
+            <input name="url" value={draft.url} onChange={(event) => updateDraft("url", event.target.value)} placeholder="Title URL" />
+            <label className="color-input-row">
+              <span>Accent color</span>
+              <input type="color" value={safeEmbedColor(draft.color)} onChange={(event) => updateDraft("color", event.target.value)} aria-label="Embed accent color" />
+              <input name="color" value={draft.color} onChange={(event) => updateDraft("color", event.target.value)} placeholder="#5865f2" />
+            </label>
+          </div>
+
+          <div className="embed-editor-section">
+            <h2>Author</h2>
+            <input name="author_name" value={draft.authorName} onChange={(event) => updateDraft("authorName", event.target.value)} placeholder="Author name" />
+            <input name="author_url" value={draft.authorUrl} onChange={(event) => updateDraft("authorUrl", event.target.value)} placeholder="Author URL" />
+            <input name="author_icon_url" value={draft.authorIconUrl} onChange={(event) => updateDraft("authorIconUrl", event.target.value)} placeholder="Author icon URL" />
+          </div>
+
+          <div className="embed-editor-section">
+            <div className="panel-title-row">
+              <h2>Fields</h2>
+              <button type="button" className="button ghost" onClick={addField} disabled={fields.length >= 25}>
+                <Plus size={16} />
+                Add Field
+              </button>
+            </div>
+            <input type="hidden" name="fields" value={embedFieldsPayload(fields)} />
+            <div className="embed-field-list">
+              {fields.map((field) => (
+                <div className="embed-field-editor" key={field.id}>
+                  <input value={field.name} onChange={(event) => updateField(field.id, { name: event.target.value })} placeholder="Field name" />
+                  <textarea value={field.value} onChange={(event) => updateField(field.id, { value: event.target.value })} placeholder="Field value" />
+                  <label className="switch-line">
+                    <input type="checkbox" checked={field.inline} onChange={(event) => updateField(field.id, { inline: event.target.checked })} />
+                    <span>Inline</span>
+                  </label>
+                  <button type="button" className="icon-button danger" aria-label="Remove field" onClick={() => removeField(field.id)}>
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="embed-editor-section">
+            <h2>Media</h2>
+            <input name="thumbnail_url" value={draft.thumbnailUrl} onChange={(event) => updateDraft("thumbnailUrl", event.target.value)} placeholder="Thumbnail URL" />
+            <input name="image_url" value={draft.imageUrl} onChange={(event) => updateDraft("imageUrl", event.target.value)} placeholder="Image URL" />
+            <input name="footer_text" value={draft.footerText} onChange={(event) => updateDraft("footerText", event.target.value)} placeholder="Footer text" />
+            <input name="footer_icon_url" value={draft.footerIconUrl} onChange={(event) => updateDraft("footerIconUrl", event.target.value)} placeholder="Footer icon URL" />
+            <label className="switch-line">
+              <input type="checkbox" name="timestamp" checked={draft.timestamp} onChange={(event) => updateDraft("timestamp", event.target.checked)} />
+              <span>Timestamp</span>
+            </label>
+          </div>
+
+          <button className="button primary embed-send-button">
+            <Send size={16} />
+            Send Embed
+          </button>
+        </section>
+
+        <aside className="embed-preview-panel" aria-label="Embed preview">
+          <div className="discord-preview">
+            <div className="discord-avatar">CU</div>
+            <div className="discord-message">
+              <div className="discord-message-header">
+                <strong>CSRP Utilities</strong>
+                <span>Today at {new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+              </div>
+              {draft.content && <div className="discord-content">{previewLines(draft.content)}</div>}
+              <div className="discord-embed" style={{ borderLeftColor: safeEmbedColor(draft.color) }}>
+                <div className="discord-embed-main">
+                  {draft.authorName && (
+                    <div className="discord-embed-author">
+                      {draft.authorIconUrl && <img src={draft.authorIconUrl} alt="" />}
+                      <span>{draft.authorName}</span>
+                    </div>
+                  )}
+                  {draft.title && <strong className="discord-embed-title">{draft.title}</strong>}
+                  {draft.description && <p>{previewLines(draft.description)}</p>}
+                  {visibleFields.length > 0 && (
+                    <div className="discord-embed-fields">
+                      {visibleFields.map((field) => (
+                        <div className={field.inline ? "inline" : ""} key={field.id}>
+                          {field.name && <strong>{field.name}</strong>}
+                          {field.value && <span>{previewLines(field.value)}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {draft.imageUrl && <img className="discord-embed-image" src={draft.imageUrl} alt="" />}
+                  {(draft.footerText || draft.footerIconUrl || draft.timestamp) && (
+                    <div className="discord-embed-footer">
+                      {draft.footerIconUrl && <img src={draft.footerIconUrl} alt="" />}
+                      <span>{[draft.footerText, draft.timestamp ? "Today" : ""].filter(Boolean).join(" • ")}</span>
+                    </div>
+                  )}
+                </div>
+                {draft.thumbnailUrl && <img className="discord-embed-thumbnail" src={draft.thumbnailUrl} alt="" />}
+              </div>
+            </div>
+          </div>
+        </aside>
+      </DashboardPostForm>
+    </Panel>
+  );
 }
 
 function Modlogs({ data }: { data: DashboardData }) {

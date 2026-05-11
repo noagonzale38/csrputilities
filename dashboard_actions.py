@@ -675,7 +675,11 @@ def _parse_fields(raw: str) -> list[tuple[str, str, bool]]:
     for line in (raw or "").splitlines():
         parts = [part.strip() for part in line.split("|")]
         if len(parts) >= 2:
-            fields.append((parts[0], parts[1], len(parts) >= 3 and parts[2].lower() in {"1", "true", "yes", "inline"}))
+            fields.append((
+                parts[0],
+                parts[1].replace("\\n", "\n"),
+                len(parts) >= 3 and parts[2].lower() in {"1", "true", "yes", "inline"},
+            ))
     return fields[:25]
 
 
@@ -690,6 +694,7 @@ async def send_custom_embed(bot, actor_id: int, payload: dict) -> str:
         description=payload.get("description") or None,
         color=discord.Color(int((payload.get("color") or "2B2D31").replace("#", ""), 16)),
         url=payload.get("url") or None,
+        timestamp=discord.utils.utcnow() if payload.get("timestamp") == "on" else None,
     )
     if payload.get("author_name"):
         embed.set_author(

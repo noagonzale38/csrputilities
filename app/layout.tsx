@@ -14,7 +14,10 @@ function dashboardEnvironmentLabel() {
 
 export const metadata: Metadata = {
   title: "CSRP Utilities",
-  description: "Discord bot dashboard and staff control panel"
+  description: "Discord bot dashboard and staff control panel",
+  icons: {
+    icon: "/icon.svg"
+  }
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
