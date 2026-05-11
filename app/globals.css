@@ -1749,6 +1749,29 @@ option {
   text-align: center;
 }
 
+.state-page h1,
+.state-page p {
+  margin: 0;
+}
+
+.access-denied-page {
+  align-content: center;
+}
+
+.access-denied-page svg {
+  color: var(--danger);
+}
+
+.access-denied-page h1 {
+  color: var(--text);
+  font-size: 2rem;
+}
+
+.access-denied-page p {
+  max-width: 560px;
+  line-height: 1.6;
+}
+
 .spin {
   animation: spin 1s linear infinite;
 }

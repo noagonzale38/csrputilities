@@ -557,13 +557,15 @@ function useDashboardData() {
     const loadDashboardData = () => {
       const query = window.location.search;
       fetch(`/api/dashboard${query}`, { credentials: "include" })
-        .then((response) => {
+        .then(async (response) => {
           if (response.redirected || response.status === 401) {
             window.location.href = "/";
             return null;
           }
-          if (!response.ok) throw new Error("Unable to load dashboard data.");
-          return response.json();
+          const contentType = response.headers.get("content-type") || "";
+          const payload = contentType.includes("application/json") ? await response.json() : null;
+          if (!response.ok) throw new Error(payload?.error || "Unable to load dashboard data.");
+          return payload;
         })
         .then((payload) => {
           if (!cancelled && payload) {
@@ -585,6 +587,24 @@ function useDashboardData() {
   }, []);
 
   return { data, error };
+}
+
+function isAccessDeniedMessage(message: string) {
+  return /access|restricted|staging|permitted|administrator/i.test(message);
+}
+
+function AccessDenied({ message }: { message: string }) {
+  return (
+    <main className="state-page access-denied-page">
+      <ShieldAlert size={34} />
+      <h1>Access denied</h1>
+      <p>{message}</p>
+      <a className="button ghost" href="/api/logout">
+        <LogOut size={16} />
+        Logout
+      </a>
+    </main>
+  );
 }
 
 function fieldValue(value: unknown) {
@@ -984,6 +1004,7 @@ export default function Dashboard() {
   }, [activeTheme.id, themesHydrated]);
 
   if (error) {
+    if (isAccessDeniedMessage(error)) return <AccessDenied message={error} />;
     return <main className="state-page"><p>{error}</p></main>;
   }
 

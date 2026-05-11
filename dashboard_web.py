@@ -65,12 +65,60 @@ _dotenv_cache = dotenv_values(BASE_DIR / ".env")
 
 
 def _dashboard_environment_label():
-    dashboard_env = os.getenv("DASHBOARD_ENV", "").strip().lower()
+    dashboard_env = _dashboard_environment_key()
     return {
         "staging": "Staging",
         "development": "Development",
         "dev": "Development",
     }.get(dashboard_env, "")
+
+
+def _dashboard_environment_key():
+    return (_env_value("DASHBOARD_ENV") or "").strip().lower()
+
+
+def _env_int(name):
+    value = _env_value(name)
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _staging_access_role_id():
+    return _env_int("DASHBOARD_STAGING_ACCESS_ROLE_ID")
+
+
+def _staging_access_required():
+    return _dashboard_environment_key() == "staging"
+
+
+def _member_has_staging_access(member):
+    role_id = _staging_access_role_id()
+    if role_id is None:
+        return False
+    return any(role.id == role_id for role in member.roles)
+
+
+def _staging_access_denial_message(member):
+    if not _staging_access_required():
+        return None
+    if _staging_access_role_id() is None:
+        return "Staging dashboard access is not configured. Set DASHBOARD_STAGING_ACCESS_ROLE_ID."
+    if not _member_has_staging_access(member):
+        return "This staging dashboard is restricted to approved staging testers."
+    return None
+
+
+def _dashboard_access_denial_message(member):
+    staging_denial = _staging_access_denial_message(member)
+    if staging_denial:
+        return staging_denial
+    if not member_has_access([role.id for role in member.roles], None):
+        return "You do not have access to this dashboard. Ask an administrator to assign a dashboard access role."
+    return None
 
 
 def _env_value(name):
@@ -236,6 +284,13 @@ def current_member():
         return None
 
 
+def _deny_dashboard_access(message, status=403):
+    if request.path.startswith("/api/") or _wants_json_response():
+        return jsonify({"error": message}), status
+    flash(message, "error")
+    return redirect(url_for("index"))
+
+
 def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
@@ -250,6 +305,9 @@ def login_required(view):
                 return jsonify({"error": "Authentication required."}), 401
             flash("Your Discord account is not in the configured server.", "error")
             return redirect(url_for("index"))
+        access_denial = _dashboard_access_denial_message(member)
+        if access_denial:
+            return _deny_dashboard_access(access_denial)
         return view(*args, **kwargs)
 
     return wrapped
@@ -489,10 +547,15 @@ def auth_callback():
     session["discord_user_id"] = int(user["id"])
     session["discord_username"] = user.get("username", "Discord User")
 
-    if current_member() is None:
+    member = current_member()
+    if member is None:
         session.clear()
         flash("Your account does not have access to the configured server.", "error")
         return redirect(_dashboard_url("/"))
+    access_denial = _dashboard_access_denial_message(member)
+    if access_denial:
+        flash(access_denial, "error")
+        return redirect(_dashboard_url("/dashboard"))
 
     flash("Logged in through Discord.", "success")
     return redirect(_dashboard_url("/dashboard"))
