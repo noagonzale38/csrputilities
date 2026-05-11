@@ -1,9 +1,11 @@
 import os
 import json
+from pathlib import Path
 from dotenv import load_dotenv
 from discord.ext import commands
 
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(dotenv_path=BASE_DIR / ".env")
 
 TOKEN = os.getenv("BOT_TOKEN")
 SERVER_KEY = os.getenv("SERVER_KEY")

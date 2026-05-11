@@ -3,13 +3,35 @@ import { NextRequest, NextResponse } from "next/server";
 const DEFAULT_BACKEND_ORIGIN = "http://127.0.0.1:4000";
 const DEFAULT_DASHBOARD_ORIGIN = "http://127.0.0.1:3000";
 const STRIPPED_REQUEST_HEADERS = ["accept-encoding", "connection", "content-length", "host"];
+const LOCAL_ORIGIN_HOSTS = new Set(["0.0.0.0", "127.0.0.1", "localhost"]);
 
 function backendOrigin() {
-  return (process.env.NEXT_PUBLIC_BACKEND_ORIGIN || DEFAULT_BACKEND_ORIGIN).replace(/\/+$/, "");
+  const configuredOrigin = (process.env.NEXT_PUBLIC_BACKEND_ORIGIN || DEFAULT_BACKEND_ORIGIN).replace(/\/+$/, "");
+
+  try {
+    if (new URL(configuredOrigin).origin === new URL(dashboardOrigin()).origin) {
+      return DEFAULT_BACKEND_ORIGIN;
+    }
+  } catch {
+    return DEFAULT_BACKEND_ORIGIN;
+  }
+
+  return configuredOrigin;
 }
 
 function dashboardOrigin() {
-  return (process.env.DASHBOARD_PUBLIC_ORIGIN || DEFAULT_DASHBOARD_ORIGIN).replace(/\/+$/, "");
+  return (
+    process.env.DASHBOARD_PUBLIC_ORIGIN ||
+    process.env.PUBLIC_URL ||
+    process.env.APP_URL ||
+    process.env.SITE_URL ||
+    process.env.NEXTAUTH_URL ||
+    DEFAULT_DASHBOARD_ORIGIN
+  ).replace(/\/+$/, "");
+}
+
+function publicRequestOrigin(request: NextRequest) {
+  return dashboardOrigin() || request.nextUrl.origin;
 }
 
 function joinPath(prefix: string, segments: string[]) {
@@ -31,9 +53,10 @@ export function mapApiPath(path: string[]) {
 function requestHeaders(request: NextRequest, target: URL) {
   const headers = new Headers(request.headers);
   STRIPPED_REQUEST_HEADERS.forEach((header) => headers.delete(header));
-  headers.set("x-forwarded-host", request.headers.get("host") || request.nextUrl.host);
-  headers.set("x-forwarded-proto", request.nextUrl.protocol.replace(":", ""));
-  headers.set("x-forwarded-port", request.nextUrl.port || (request.nextUrl.protocol === "https:" ? "443" : "80"));
+  const requestOrigin = new URL(publicRequestOrigin(request));
+  headers.set("x-forwarded-host", requestOrigin.host);
+  headers.set("x-forwarded-proto", requestOrigin.protocol.replace(":", ""));
+  headers.set("x-forwarded-port", requestOrigin.port || (requestOrigin.protocol === "https:" ? "443" : "80"));
   headers.set("x-forwarded-server", target.host);
   return headers;
 }
@@ -48,6 +71,9 @@ function normalizeLocation(location: string | null, requestOrigin: string) {
     if (sameAppOrigins.includes(locationUrl.origin)) {
       return `${requestOrigin}${locationUrl.pathname}${locationUrl.search}${locationUrl.hash}`;
     }
+    if (LOCAL_ORIGIN_HOSTS.has(locationUrl.hostname)) {
+      return `${requestOrigin}${locationUrl.pathname}${locationUrl.search}${locationUrl.hash}`;
+    }
   } catch {
     return location;
   }
@@ -58,6 +84,7 @@ function normalizeLocation(location: string | null, requestOrigin: string) {
 export async function proxyToBackend(request: NextRequest, backendPath: string) {
   const target = new URL(backendPath, backendOrigin());
   target.search = request.nextUrl.search;
+  const requestOrigin = publicRequestOrigin(request);
 
   try {
     const hasBody = request.method !== "GET" && request.method !== "HEAD";
@@ -69,7 +96,7 @@ export async function proxyToBackend(request: NextRequest, backendPath: string) 
       cache: "no-store"
     });
     const headers = new Headers(response.headers);
-    const location = normalizeLocation(headers.get("location"), request.nextUrl.origin);
+    const location = normalizeLocation(headers.get("location"), requestOrigin);
 
     if (location) headers.set("location", location);
 

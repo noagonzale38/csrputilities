@@ -5,6 +5,7 @@ import subprocess
 import threading
 import uuid
 from functools import wraps
+from pathlib import Path
 
 import requests
 from flask import (
@@ -19,6 +20,7 @@ from flask import (
     url_for,
 )
 from flask_cors import CORS
+from dotenv import dotenv_values
 
 from config import BOT_ADMINISTRATION
 from cogs.settings import RANK_ORDER, get_guild_settings
@@ -65,6 +67,8 @@ CORS(app)
 _bot_provider = None
 _web_thread = None
 _next_process = None
+BASE_DIR = Path(__file__).resolve().parent
+_dotenv_cache = dotenv_values(BASE_DIR / ".env")
 
 
 def _dashboard_environment_label():
@@ -78,7 +82,19 @@ def _dashboard_environment_label():
 
 def _env_value(name):
     value = os.getenv(name, "").strip()
-    return value or None
+    if value:
+        return value
+
+    fallback = str(_dotenv_cache.get(name, "")).strip()
+    return fallback or None
+
+
+def _first_env_value(*names):
+    for name in names:
+        value = _env_value(name)
+        if value:
+            return value
+    return None
 
 
 def _forwarded_public_origin():
@@ -96,7 +112,17 @@ def _forwarded_public_origin():
 
 
 def _dashboard_public_origin():
-    return (_env_value("DASHBOARD_PUBLIC_ORIGIN") or _forwarded_public_origin() or "http://127.0.0.1:3000").rstrip("/")
+    return (
+        _first_env_value(
+            "DASHBOARD_PUBLIC_ORIGIN",
+            "PUBLIC_URL",
+            "APP_URL",
+            "SITE_URL",
+            "NEXTAUTH_URL",
+        )
+        or _forwarded_public_origin()
+        or "http://127.0.0.1:3000"
+    ).rstrip("/")
 
 
 def _dashboard_url(path=""):
@@ -188,11 +214,12 @@ def start_next_dashboard(host=None, port=None):
     host = host or os.getenv("NEXT_DASHBOARD_HOST", "0.0.0.0")
     port = str(port or os.getenv("NEXT_DASHBOARD_PORT", "3000"))
     env = os.environ.copy()
+    env.setdefault("DASHBOARD_PUBLIC_ORIGIN", _env_value("DASHBOARD_PUBLIC_ORIGIN") or "http://127.0.0.1:3000")
     env.setdefault("NEXT_PUBLIC_BACKEND_ORIGIN", os.getenv("DASHBOARD_BACKEND_ORIGIN", "http://127.0.0.1:4000"))
 
     _next_process = subprocess.Popen(
         [npm, "run", "start", "--", "-H", host, "-p", port],
-        cwd=os.getcwd(),
+        cwd=BASE_DIR,
         env=env,
     )
     return _next_process
