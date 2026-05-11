@@ -686,7 +686,10 @@ def dashboard_action(action):
             "partnerships",
             lambda: run_command(
                 "partnership",
-                {"body": request.form["body"], "message_link": None},
+                {
+                    "body": request.form.get("body") or None,
+                    "message_link": request.form.get("message_link") or None,
+                },
                 channel_id=request.form["channel_id"],
             ),
         ),

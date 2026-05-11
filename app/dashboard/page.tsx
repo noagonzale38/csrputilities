@@ -1891,7 +1891,17 @@ function Erlc({ data }: { data: DashboardData }) {
 }
 
 function Partnerships({ channels }: { channels: Channel[] }) {
-  return <Panel title="Partnerships" index={["Announcement"]}><ActionForm action="partnership"><h2>Send Partnership</h2><ChannelSelect name="channel_id" channels={channels} /><textarea name="body" placeholder="Partnership message body" required /><button className="button primary">Send Partnership</button></ActionForm></Panel>;
+  return (
+    <Panel title="Partnerships" index={["Announcement", "Message Link"]}>
+      <ActionForm action="partnership">
+        <h2>Send Partnership</h2>
+        <ChannelSelect name="channel_id" channels={channels} />
+        <textarea name="body" placeholder="Partnership message body" />
+        <input name="message_link" placeholder="Discord message link" />
+        <button className="button primary">Send Partnership</button>
+      </ActionForm>
+    </Panel>
+  );
 }
 
 function Embeds({ channels }: { channels: Channel[] }) {
