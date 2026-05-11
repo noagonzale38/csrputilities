@@ -2031,7 +2031,70 @@ function BotUpdates({ channels }: { channels: Channel[] }) {
 }
 
 function BotSettings({ data }: { data: DashboardData }) {
-  return <Panel title="Basic Settings" index={["Staff Roles", "Channels", "Feedback", "Rank Roles"]}><DashboardPostForm action="settings_save" className="card-stack"><article className="setting-card"><h2>Staff Roles</h2><p>{roleNames(data.settings.staff_roles, data.roles).join(", ") || "No staff roles selected"}</p><RoleSelect name="staff_roles" roles={data.roles} selected={data.settings.staff_roles} /></article><article className="setting-card"><h2>Feature Roles</h2><label>Partnerships</label><RoleSelect name="partnership_allowed_roles" roles={data.roles} selected={data.settings.partnership_allowed_roles} /><label>Embed Creation</label><RoleSelect name="embed_allowed_roles" roles={data.roles} selected={data.settings.embed_allowed_roles} /><label>Retire / Reinstate</label><RoleSelect name="retire_allowed_roles" roles={data.roles} selected={data.settings.retire_allowed_roles} /></article><article className="setting-card"><h2>Channels</h2><label>Retirement Log Channel</label><ChannelSelect name="retirement_log_channel" channels={data.channels} selected={data.settings.retirement_log_channel} /><label>Staff Feedback Channel</label><ChannelSelect name="staff_feedback_channel" channels={data.channels} selected={data.settings.staff_feedback_channel} /></article><article className="setting-card"><h2>Feedback</h2><label className="switch-line"><input type="checkbox" name="feedback_enabled" defaultChecked={Boolean(data.settings.feedback_enabled)} /><span>Feedback enabled</span></label><textarea name="feedback_questions" defaultValue={(data.settings.feedback_questions || []).join("\n")} /></article><article className="setting-card"><h2>Rank Role Mapping</h2>{data.rank_order.map((rank) => <label key={rank}>{rank}<RoleSelect name={`rank::${rank}`} roles={data.roles} selected={data.settings.rank_roles?.[rank]} multiple={false} /></label>)}</article><button className="button primary">Save Bot Settings</button></DashboardPostForm></Panel>;
+  return (
+    <Panel title="Basic Settings" index={["Staff Roles", "Channels", "Feedback", "Rank Roles"]}>
+      <DashboardPostForm action="settings_save" className="settings-form">
+        <article className="setting-card">
+          <h2>Staff Roles</h2>
+          <p>{roleNames(data.settings.staff_roles, data.roles).join(", ") || "No staff roles selected"}</p>
+          <RoleSelect name="staff_roles" roles={data.roles} selected={data.settings.staff_roles} />
+        </article>
+
+        <article className="setting-card">
+          <h2>Feature Roles</h2>
+          <label>
+            Partnerships
+            <RoleSelect name="partnership_allowed_roles" roles={data.roles} selected={data.settings.partnership_allowed_roles} />
+          </label>
+          <label>
+            Embed Creation
+            <RoleSelect name="embed_allowed_roles" roles={data.roles} selected={data.settings.embed_allowed_roles} />
+          </label>
+          <label>
+            Retire / Reinstate
+            <RoleSelect name="retire_allowed_roles" roles={data.roles} selected={data.settings.retire_allowed_roles} />
+          </label>
+        </article>
+
+        <article className="setting-card">
+          <h2>Channels</h2>
+          <label>
+            Retirement Log Channel
+            <ChannelSelect name="retirement_log_channel" channels={data.channels} selected={data.settings.retirement_log_channel} />
+          </label>
+          <label>
+            Staff Feedback Channel
+            <ChannelSelect name="staff_feedback_channel" channels={data.channels} selected={data.settings.staff_feedback_channel} />
+          </label>
+        </article>
+
+        <article className="setting-card">
+          <h2>Feedback</h2>
+          <label className="switch-line">
+            <input type="checkbox" name="feedback_enabled" defaultChecked={Boolean(data.settings.feedback_enabled)} />
+            <span>Feedback enabled</span>
+          </label>
+          <textarea name="feedback_questions" defaultValue={(data.settings.feedback_questions || []).join("\n")} />
+        </article>
+
+        <article className="setting-card wide-card">
+          <h2>Rank Role Mapping</h2>
+          <div className="rank-role-grid">
+            {data.rank_order.map((rank) => (
+              <label key={rank}>
+                {rank}
+                <RoleSelect name={`rank::${rank}`} roles={data.roles} selected={data.settings.rank_roles?.[rank]} multiple={false} />
+              </label>
+            ))}
+          </div>
+        </article>
+
+        <div className="settings-actions">
+          <button className="button primary">Save Bot Settings</button>
+        </div>
+      </DashboardPostForm>
+    </Panel>
+  );
 }
 
 function AccessManager({ data }: { data: DashboardData }) {

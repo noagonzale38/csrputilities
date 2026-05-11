@@ -545,6 +545,7 @@ body.is-resizing-rail * {
 
 .workspace {
   min-width: 0;
+  overflow-x: clip;
 }
 
 .topbar {
@@ -591,6 +592,8 @@ body.is-resizing-rail * {
 
 .content-grid {
   width: min(1220px, calc(100% - 68px));
+  max-width: 100%;
+  min-width: 0;
   margin: 42px auto 72px;
   display: grid;
   gap: 26px;
@@ -683,10 +686,15 @@ body.is-resizing-rail * {
 }
 
 .settings-layout {
+  min-width: 0;
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
   gap: 34px;
   align-items: start;
+}
+
+.settings-layout > * {
+  min-width: 0;
 }
 
 .section-index {
@@ -720,8 +728,13 @@ body.is-resizing-rail * {
 }
 
 .card-stack {
+  min-width: 0;
   display: grid;
   gap: 18px;
+}
+
+.card-stack > .button {
+  justify-self: start;
 }
 
 .two-col {
@@ -732,6 +745,7 @@ body.is-resizing-rail * {
 
 .setting-card {
   position: relative;
+  min-width: 0;
   padding: 22px;
 }
 
@@ -814,6 +828,7 @@ option {
 
 .dropdown-select {
   position: relative;
+  min-width: 0;
   width: 100%;
 }
 
@@ -961,6 +976,50 @@ option {
 }
 
 .switch-line input {
+  width: auto;
+}
+
+.settings-form {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.settings-form .setting-card {
+  display: grid;
+  align-content: start;
+  gap: 13px;
+}
+
+.settings-form label,
+.rank-role-grid label {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted-strong);
+  font-size: .9rem;
+  font-weight: 850;
+}
+
+.settings-form .wide-card,
+.settings-actions {
+  grid-column: 1 / -1;
+}
+
+.rank-role-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  min-width: 0;
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.settings-actions .button {
   width: auto;
 }
 
@@ -1776,6 +1835,10 @@ option {
     grid-template-columns: 1fr;
   }
 
+  .settings-form {
+    grid-template-columns: 1fr;
+  }
+
   .embed-builder {
     grid-template-columns: 1fr;
   }
@@ -1940,6 +2003,10 @@ option {
   .top-actions,
   .top-actions .button {
     width: 100%;
+  }
+
+  .rank-role-grid {
+    grid-template-columns: 1fr;
   }
 
   .theme-view-actions .button,
