@@ -9,7 +9,7 @@ export default function Home() {
         <div className="login-overlay" />
         <div className="quote">
           <Shield size={28} />
-          <p>CSRP Utilities gives our staff the tools we need in one clean place: infractions, staff management, smart hit reviews, and the custom workflows our server depends on.</p>
+          <p>Thanks to the help of CSRP Utilities, we've been able to add features specific to our server that no other bot could offer, like an advanced infractions system, fast staff management commands like /reinstate, and the addition of our smart hits system which automatically reviews hits and sends them for a secondary staff review.</p>
           <span>- PointlessTalderson (Director)</span>
         </div>
       </section>
