@@ -1546,7 +1546,6 @@ function Overview({ data }: { data: DashboardData }) {
     ["Retirements", data.stats.retirement_count],
     ["ERLC Players", data.stats.erlc_player_count],
     ["Command Blacklists", data.stats.command_blacklist_count],
-    ["Latency", `${data.stats.bot_latency_ms}ms`]
   ];
 
   return (
