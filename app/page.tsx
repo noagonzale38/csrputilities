@@ -24,7 +24,7 @@ export default function Home() {
             <img src="https://csrptickets-storage.s3.us-east-1.amazonaws.com/csrp.png" alt="CSRP Utilities Logo" width="112" />
             <span>CSRP Utilities</span>
           </div>
-          <p className="auth-eyebrow">Secure staff dashboard</p>
+          <p className="auth-eyebrow">CALIFORNIA STATE ROLEPLAY</p>
           <h1>Log in to CSRP Utilities</h1>
           <p>Sign in using your Discord account to continue.</p>
           <a className="button primary wide" href="/api/login">
