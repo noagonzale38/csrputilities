@@ -6,6 +6,7 @@ from datetime import timedelta
 from typing import Any
 
 import discord
+from discord.ext import commands
 
 from config import (
     INFRACTION_CHANNEL,
@@ -38,6 +39,125 @@ from cogs.staffmgmt import (
 PRC_API = "https://api.policeroleplay.community/v1"
 PRC_HEADERS = {"Content-Type": "application/json", "Server-Key": SERVER_KEY}
 DEFAULT_GUILD_ID = REPORT_GUILD_ID
+
+
+class DashboardSentMessage:
+    def __init__(self, content=None, embed=None, embeds=None):
+        self.content = content
+        self.embed = embed
+        self.embeds = embeds or ([embed] if embed else [])
+        self.deleted = False
+
+    async def edit(self, **kwargs):
+        self.content = kwargs.get("content", self.content)
+        if "embed" in kwargs:
+            self.embed = kwargs["embed"]
+            self.embeds = [self.embed] if self.embed else []
+        if "embeds" in kwargs:
+            self.embeds = kwargs["embeds"] or []
+            self.embed = self.embeds[0] if self.embeds else None
+        return self
+
+    async def delete(self, *args, **kwargs):
+        self.deleted = True
+
+
+class _NoopTyping:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+
+class DashboardCommandContext:
+    def __init__(self, bot, guild: discord.Guild, author: discord.Member, channel=None):
+        self.bot = bot
+        self.guild = guild
+        self.author = author
+        self.channel = channel
+        self.me = guild.me
+        self.message = None
+        self.interaction = None
+        self.command = None
+        self.invoked_subcommand = None
+        self.prefix = "/"
+        self.clean_prefix = "/"
+        self.sent_messages: list[DashboardSentMessage] = []
+
+    async def send(self, content=None, **kwargs):
+        kwargs.pop("ephemeral", None)
+        message = DashboardSentMessage(
+            content=content,
+            embed=kwargs.get("embed"),
+            embeds=kwargs.get("embeds"),
+        )
+        self.sent_messages.append(message)
+        if self.channel is None:
+            return message
+        return await self.channel.send(content=content, **kwargs)
+
+    async def reply(self, content=None, **kwargs):
+        kwargs.pop("mention_author", None)
+        return await self.send(content=content, **kwargs)
+
+    async def defer(self, *args, **kwargs):
+        return None
+
+    def typing(self):
+        return _NoopTyping()
+
+
+def _message_summary(message: DashboardSentMessage) -> str:
+    if message.content:
+        return str(message.content)
+
+    embeds = message.embeds or ([message.embed] if message.embed else [])
+    for embed in embeds:
+        if embed is None:
+            continue
+        title = getattr(embed, "title", None)
+        description = getattr(embed, "description", None)
+        if title and description:
+            return f"{title}: {description}"
+        if title:
+            return str(title)
+        if description:
+            return str(description)
+
+    return ""
+
+
+def _looks_like_command_failure(summary: str) -> bool:
+    lowered = summary.casefold()
+    failure_markers = [
+        "action blocked",
+        "blacklisted",
+        "cannot ",
+        "connection error",
+        "failed",
+        "invalid",
+        "insufficient rank",
+        "manual handling required",
+        "missing ",
+        "no record",
+        "not configured",
+        "not banned",
+        "not found",
+        "not permitted",
+        "not staff",
+        "rate limited",
+        "role not",
+        "server offline",
+        "unauthorized",
+        "unexpected error",
+    ]
+    non_fatal_markers = [
+        "dm failed",
+    ]
+    return any(marker in lowered for marker in failure_markers) and not any(
+        marker in lowered for marker in non_fatal_markers
+    )
 
 
 def _load_json_file(path: str, fallback: Any):
@@ -205,6 +325,84 @@ async def get_member(bot, user_id: Any) -> discord.Member:
 
 async def get_actor_member(bot, actor_id: int) -> discord.Member:
     return await get_member(bot, actor_id)
+
+
+async def _resolve_dashboard_command_channel(bot, channel_id):
+    if not channel_id:
+        return None
+    channel = bot.get_channel(int(channel_id))
+    if channel is None:
+        raise RuntimeError("Command target channel was not found.")
+    return channel
+
+
+async def run_dashboard_command(bot, actor_id: int, command_name: str, parameters: dict | None = None, channel_id=None) -> str:
+    guild = await get_target_guild(bot)
+    actor = await get_actor_member(bot, actor_id)
+    command = bot.get_command(command_name)
+    if command is None:
+        raise RuntimeError(f"Command '/{command_name}' is not loaded.")
+
+    ctx = DashboardCommandContext(
+        bot=bot,
+        guild=guild,
+        author=actor,
+        channel=await _resolve_dashboard_command_channel(bot, channel_id),
+    )
+    ctx.command = command
+
+    try:
+        can_run = await command.can_run(ctx)
+    except commands.CommandError as exc:
+        raise RuntimeError(str(exc) or "You are not permitted to use this command.") from exc
+    if not can_run:
+        raise RuntimeError("You are not permitted to use this command.")
+
+    callback_args = [ctx]
+    if command.cog is not None:
+        callback_args.insert(0, command.cog)
+
+    await command.callback(*callback_args, **(parameters or {}))
+
+    summary = ""
+    for message in reversed(ctx.sent_messages):
+        summary = _message_summary(message)
+        if summary:
+            break
+
+    if summary and _looks_like_command_failure(summary):
+        raise RuntimeError(summary)
+
+    return summary or f"Executed /{command_name}."
+
+
+async def run_dashboard_member_command(
+    bot,
+    actor_id: int,
+    command_name: str,
+    user_identifier: Any,
+    parameters: dict | None = None,
+    *,
+    user_parameter: str = "user",
+    channel_id=None,
+) -> str:
+    member = await resolve_member(bot, user_identifier)
+    command_parameters = dict(parameters or {})
+    command_parameters[user_parameter] = member
+    return await run_dashboard_command(bot, actor_id, command_name, command_parameters, channel_id=channel_id)
+
+
+async def run_dashboard_ban_command(bot, actor_id: int, user_identifier: Any, reason: str) -> str:
+    try:
+        user_arg = await resolve_member(bot, user_identifier)
+    except RuntimeError:
+        user_arg = await resolve_user_id(bot, user_identifier)
+    return await run_dashboard_command(bot, actor_id, "ban", {"user": user_arg, "reason": reason})
+
+
+async def run_dashboard_unban_command(bot, actor_id: int, user_identifier: Any, reason: str) -> str:
+    user_id = await resolve_user_id(bot, user_identifier)
+    return await run_dashboard_command(bot, actor_id, "unban", {"user_id": user_id, "reason": reason})
 
 
 async def collect_dashboard_stats(bot) -> dict:

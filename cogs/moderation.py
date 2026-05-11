@@ -514,6 +514,10 @@ class Moderation(commands.Cog):
     @is_role_authorized()
     async def infract(self, ctx, member: discord.Member, punishment: str, *, reason: str):
         infract_channel = self.bot.get_channel(INFRACTION_CHANNEL)
+        if infract_channel is None:
+            await ctx.send(embed=error_embed("Channel Not Found", "The infraction channel could not be found."))
+            return
+
         ref_id = random.randint(100000, 999999)
 
         self.infractions[ref_id] = {
@@ -539,7 +543,7 @@ class Moderation(commands.Cog):
                 f"**━━━━━━━━━━━━━━━━━━━━━**"
             ),
         )
-        infraction_embed.set_footer(text=f"Signed By: {ctx.author}", icon_url=ctx.author.avatar.url)
+        infraction_embed.set_footer(text=f"Signed By: {ctx.author}", icon_url=ctx.author.display_avatar.url)
         infraction_embed.set_thumbnail(
             url="https://media.discordapp.net/attachments/1155943381013368853/1170036267141054494/cachedImage.png?"
         )
@@ -661,7 +665,7 @@ class Moderation(commands.Cog):
                 view.add_item(accept_btn)
                 view.add_item(deny_btn)
 
-                await appeals_channel.send(f"{infracted_by.mention}", embed=appeal_embed, view=view)
+                await appeals_channel.send(f"{ctx.author.mention}", embed=appeal_embed, view=view)
                 await modal_interaction.response.send_message(
                     embed=success_embed("Appeal Submitted", f"Your appeal has been submitted. Reference ID: `{ref_id}`"),
                     ephemeral=True,

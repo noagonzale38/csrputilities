@@ -34,21 +34,13 @@ from dashboard_actions import (
     get_actor_member,
     get_modlogs_for_user,
     get_target_guild,
-    perform_ban,
-    perform_infract,
-    perform_kick,
-    perform_mute,
-    perform_reinstate,
-    perform_retire,
-    perform_unban,
-    perform_unmute,
-    perform_warn,
+    run_dashboard_ban_command,
+    run_dashboard_command,
+    run_dashboard_member_command,
+    run_dashboard_unban_command,
     resolve_user_id,
-    run_docker_exec,
     send_bot_message,
     send_custom_embed,
-    send_erlc_command,
-    send_partnership,
     unblacklist_command_user,
     update_bot_status,
     update_dashboard_settings,
@@ -571,24 +563,53 @@ def dashboard_action(action):
     def target_id(field_name="target_id"):
         return run_async(resolve_user_id(bot, request.form[field_name]))
 
+    def run_command(command_name, parameters=None, channel_id=None):
+        return run_async(run_dashboard_command(bot, actor_id, command_name, parameters or {}, channel_id=channel_id))
+
+    def run_member_command(command_name, parameters=None, user_parameter="user"):
+        return run_async(
+            run_dashboard_member_command(
+                bot,
+                actor_id,
+                command_name,
+                request.form["target_id"],
+                parameters or {},
+                user_parameter=user_parameter,
+            )
+        )
+
     handlers = {
-        "warn": ("moderation", lambda: run_async(perform_warn(bot, actor_id, target_id(), request.form["reason"]))),
-        "kick": ("moderation", lambda: run_async(perform_kick(bot, actor_id, target_id(), request.form["reason"]))),
-        "ban": ("moderation", lambda: run_async(perform_ban(bot, actor_id, target_id(), request.form["reason"]))),
-        "unban": ("moderation", lambda: run_async(perform_unban(bot, actor_id, target_id(), request.form["reason"]))),
-        "mute": ("moderation", lambda: run_async(perform_mute(bot, actor_id, target_id(), request.form["duration"], request.form["reason"]))),
-        "unmute": ("moderation", lambda: run_async(perform_unmute(bot, actor_id, target_id(), request.form["reason"]))),
-        "infract": ("infractions", lambda: run_async(perform_infract(bot, actor_id, target_id(), request.form["punishment"], request.form["reason"]))),
-        "retire": ("staff_management", lambda: run_async(perform_retire(bot, actor_id, target_id()))),
-        "reinstate": ("staff_management", lambda: run_async(perform_reinstate(bot, actor_id, target_id()))),
-        "erlc_command": ("erlc", lambda: run_async(send_erlc_command(request.form["command"]))),
-        "partnership": ("partnerships", lambda: run_async(send_partnership(bot, actor_id, int(request.form["channel_id"]), request.form["body"]))),
+        "warn": ("moderation", lambda: run_member_command("warn", {"reason": request.form["reason"]})),
+        "kick": ("moderation", lambda: run_member_command("kick", {"reason": request.form["reason"]})),
+        "ban": ("moderation", lambda: run_async(run_dashboard_ban_command(bot, actor_id, request.form["target_id"], request.form["reason"]))),
+        "unban": ("moderation", lambda: run_async(run_dashboard_unban_command(bot, actor_id, request.form["target_id"], request.form["reason"]))),
+        "mute": ("moderation", lambda: run_member_command("mute", {"time": request.form["duration"], "reason": request.form["reason"]})),
+        "unmute": ("moderation", lambda: run_member_command("unmute", {"reason": request.form["reason"]})),
+        "infract": (
+            "infractions",
+            lambda: run_member_command(
+                "infract",
+                {"punishment": request.form["punishment"], "reason": request.form["reason"]},
+                user_parameter="member",
+            ),
+        ),
+        "retire": ("staff_management", lambda: run_member_command("retire")),
+        "reinstate": ("staff_management", lambda: run_member_command("reinstate")),
+        "erlc_command": ("erlc", lambda: run_command("erlc command", {"command": request.form["command"]})),
+        "partnership": (
+            "partnerships",
+            lambda: run_command(
+                "partnership",
+                {"body": request.form["body"], "message_link": None},
+                channel_id=request.form["channel_id"],
+            ),
+        ),
         "modlogs_clear_user": ("modlogs", lambda: run_async(clear_modlogs_for_user(target_id()))),
         "modlogs_clear_all": ("modlogs", lambda: run_async(clear_all_modlogs())),
         "embed_send": ("embed_wizard", lambda: run_async(send_custom_embed(bot, actor_id, dict(request.form)))),
         "blacklist_add": ("command_blacklist", lambda: run_async(blacklist_command_user(target_id()))),
         "blacklist_remove": ("command_blacklist", lambda: run_async(unblacklist_command_user(target_id()))),
-        "docker_exec": ("docker_commands", lambda: run_async(run_docker_exec(request.form["database"], request.form["command"]))),
+        "docker_exec": ("docker_commands", lambda: run_command("docker-exec", {"database": request.form["database"], "command": request.form["command"]})),
         "bot_status": ("bot_updates", lambda: run_async(update_bot_status(bot, request.form["status_text"]))),
         "bot_message": ("bot_updates", lambda: run_async(send_bot_message(bot, int(request.form["channel_id"]), request.form["content"]))),
         "settings_save": ("bot_settings", lambda: run_async(update_dashboard_settings(run_async(get_target_guild(bot)).id, request.form))),
