@@ -736,7 +736,6 @@ class Utility(commands.Cog):
             color=discord.Color.yellow(),
         )
         embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else CSRP_ICON)
-        brand_footer(embed)
         await ctx.send(embed=embed)
 
 
