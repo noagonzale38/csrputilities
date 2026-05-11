@@ -16,7 +16,7 @@ export const metadata: Metadata = {
   title: "CSRP Utilities",
   description: "Discord bot dashboard and staff control panel",
   icons: {
-    icon: "/icon.svg"
+    icon: "https://csrptickets-storage.s3.us-east-1.amazonaws.com/csrp.png"
   }
 };
 
