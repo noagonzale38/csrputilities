@@ -306,6 +306,17 @@ class Utility(commands.Cog):
         command_list = sorted(self._command_lookup())
         return [app_commands.Choice(name=cmd, value=cmd) for cmd in command_list if current.lower() in cmd.lower()][:25]
 
+    @commands.hybrid_command(name="dashboard", description="Get a link to the CSRP Utilities Dashboard.")
+    async def dashboard(self, ctx):
+        embed = discord.Embed(title="Dashboard", description="To visit the CSRP Utilities Dashboard, click [here](https://dashstaging.officialcaliforniastateroleplay.com)." color=BLANK_COLOR, timestamp=discord.utils.utcNow())
+        embed.set_author(name=guild.name, icon_url=guild.icon.url if guild.icon else "")
+        if guild.icon:
+            embed.set_thumbnail(url=guild.icon.url)
+        if guild.banner:
+            embed.set_image(url=guild.banner.url)
+        brand_footer(embed)
+        await ctx.send(embed=embed)
+
     @commands.hybrid_command(name="serverinfo", description="Shows information about the server.")
     async def serverinfo(self, ctx):
         guild = ctx.guild
