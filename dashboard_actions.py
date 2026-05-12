@@ -1,7 +1,9 @@
+import asyncio
 import json
 import re
 import subprocess
 import time
+import uuid
 from datetime import timedelta
 from typing import Any
 
@@ -39,6 +41,11 @@ from cogs.staffmgmt import (
 PRC_API = "https://api.policeroleplay.community/v1"
 PRC_HEADERS = {"Content-Type": "application/json", "Server-Key": SERVER_KEY}
 DEFAULT_GUILD_ID = REPORT_GUILD_ID
+ERLC_CUSTOM_ACTIONS_FILE = "dashboard_erlc_actions.json"
+MAX_ERLC_CUSTOM_ACTION_STEPS = 10
+MAX_ERLC_CUSTOM_ACTION_WAIT_SECONDS = 60
+MAX_ERLC_CUSTOM_ACTION_TOTAL_WAIT_SECONDS = 300
+MAX_ERLC_CUSTOM_ACTIONS = 50
 
 
 class DashboardSentMessage:
@@ -461,6 +468,171 @@ async def send_erlc_command(command: str) -> str:
     if status != 200:
         raise RuntimeError(f"ERLC API returned status {status}.")
     return normalized
+
+
+def _form_values(form_data: dict, key: str) -> list[str]:
+    if hasattr(form_data, "getlist"):
+        return [str(value).strip() for value in form_data.getlist(key)]
+    value = form_data.get(key, [])
+    if isinstance(value, list):
+        return [str(item).strip() for item in value]
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def _sanitize_erlc_action(action: dict) -> dict | None:
+    if not isinstance(action, dict):
+        return None
+    action_id = str(action.get("id", "")).strip()
+    name = str(action.get("name", "")).strip()
+    raw_steps = action.get("steps", [])
+    if not action_id or not name or not isinstance(raw_steps, list):
+        return None
+
+    steps = []
+    for step in raw_steps[:MAX_ERLC_CUSTOM_ACTION_STEPS]:
+        if not isinstance(step, dict):
+            continue
+        if step.get("type") == "wait":
+            try:
+                seconds = int(step.get("seconds", 0))
+            except (TypeError, ValueError):
+                continue
+            if 1 <= seconds <= MAX_ERLC_CUSTOM_ACTION_WAIT_SECONDS:
+                steps.append({"type": "wait", "seconds": seconds})
+            continue
+
+        command = str(step.get("command", "")).strip()
+        if command:
+            steps.append({"type": "command", "command": command[:500]})
+
+    if not steps:
+        return None
+
+    return {
+        "id": action_id,
+        "name": name[:64],
+        "steps": steps,
+        "created_by": str(action.get("created_by", "")).strip(),
+        "created_at": int(action.get("created_at", 0) or 0),
+        "updated_at": int(action.get("updated_at", 0) or 0),
+    }
+
+
+def load_erlc_custom_actions() -> list[dict]:
+    actions = _load_json_file(ERLC_CUSTOM_ACTIONS_FILE, [])
+    if not isinstance(actions, list):
+        return []
+    return [action for action in (_sanitize_erlc_action(item) for item in actions) if action]
+
+
+def _save_erlc_custom_actions(actions: list[dict]) -> None:
+    with open(ERLC_CUSTOM_ACTIONS_FILE, "w") as file:
+        json.dump(actions, file, indent=4)
+
+
+def _parse_erlc_custom_action_steps(form_data: dict) -> list[dict]:
+    step_types = _form_values(form_data, "step_type")
+    step_commands = _form_values(form_data, "step_command")
+    step_seconds = _form_values(form_data, "step_seconds")
+    step_count = min(MAX_ERLC_CUSTOM_ACTION_STEPS, max(len(step_types), len(step_commands), len(step_seconds)))
+    if step_count == 0:
+        raise RuntimeError("Add at least one custom action step.")
+
+    steps = []
+    command_count = 0
+    total_wait = 0
+    for index in range(step_count):
+        step_type = (step_types[index] if index < len(step_types) else "command").lower()
+        if step_type == "wait":
+            raw_seconds = step_seconds[index] if index < len(step_seconds) else ""
+            try:
+                seconds = int(raw_seconds)
+            except ValueError as exc:
+                raise RuntimeError(f"Step {index + 1} has an invalid wait time.") from exc
+            if seconds < 1 or seconds > MAX_ERLC_CUSTOM_ACTION_WAIT_SECONDS:
+                raise RuntimeError(
+                    f"Step {index + 1} wait must be between 1 and {MAX_ERLC_CUSTOM_ACTION_WAIT_SECONDS} seconds."
+                )
+            total_wait += seconds
+            if total_wait > MAX_ERLC_CUSTOM_ACTION_TOTAL_WAIT_SECONDS:
+                raise RuntimeError(
+                    f"Custom actions can wait up to {MAX_ERLC_CUSTOM_ACTION_TOTAL_WAIT_SECONDS} total seconds."
+                )
+            steps.append({"type": "wait", "seconds": seconds})
+            continue
+
+        command = step_commands[index] if index < len(step_commands) else ""
+        if not command:
+            raise RuntimeError(f"Step {index + 1} needs an ERLC command.")
+        if len(command) > 500:
+            raise RuntimeError(f"Step {index + 1} command is too long.")
+        command_count += 1
+        steps.append({"type": "command", "command": command})
+
+    if command_count == 0:
+        raise RuntimeError("Custom actions need at least one ERLC command step.")
+    return steps
+
+
+def create_erlc_custom_action(actor_id: int, form_data: dict) -> str:
+    name = str(form_data.get("name", "")).strip()
+    if not name:
+        raise RuntimeError("Custom action name is required.")
+    if len(name) > 64:
+        raise RuntimeError("Custom action names can be up to 64 characters.")
+
+    actions = load_erlc_custom_actions()
+    if len(actions) >= MAX_ERLC_CUSTOM_ACTIONS:
+        raise RuntimeError(f"You can save up to {MAX_ERLC_CUSTOM_ACTIONS} custom ERLC actions.")
+
+    normalized_name = name.casefold()
+    if any(action["name"].casefold() == normalized_name for action in actions):
+        raise RuntimeError("A custom ERLC action with that name already exists.")
+
+    timestamp = int(time.time())
+    actions.append(
+        {
+            "id": uuid.uuid4().hex,
+            "name": name,
+            "steps": _parse_erlc_custom_action_steps(form_data),
+            "created_by": str(actor_id),
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        }
+    )
+    _save_erlc_custom_actions(actions)
+    return f"Created custom ERLC action '{name}'."
+
+
+def delete_erlc_custom_action(action_id: str) -> str:
+    actions = load_erlc_custom_actions()
+    kept_actions = [action for action in actions if action["id"] != str(action_id)]
+    if len(kept_actions) == len(actions):
+        raise RuntimeError("Custom ERLC action was not found.")
+    _save_erlc_custom_actions(kept_actions)
+    return "Deleted custom ERLC action."
+
+
+async def run_erlc_custom_action(bot, actor_id: int, action_id: str) -> str:
+    action = next((item for item in load_erlc_custom_actions() if item["id"] == str(action_id)), None)
+    if action is None:
+        raise RuntimeError("Custom ERLC action was not found.")
+
+    command_count = 0
+    wait_count = 0
+    for index, step in enumerate(action["steps"], start=1):
+        if step["type"] == "wait":
+            wait_count += 1
+            await asyncio.sleep(int(step["seconds"]))
+            continue
+
+        try:
+            await run_dashboard_command(bot, actor_id, "erlc command", {"command": step["command"]})
+        except RuntimeError as exc:
+            raise RuntimeError(f"Step {index} failed: {exc}") from exc
+        command_count += 1
+
+    return f"Ran custom ERLC action '{action['name']}' ({command_count} commands, {wait_count} waits)."
 
 
 async def perform_warn(bot, actor_id: int, target_id: int, reason: str) -> str:

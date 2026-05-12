@@ -29,15 +29,19 @@ from dashboard_actions import (
     clear_all_modlogs,
     clear_modlogs_for_user,
     collect_dashboard_stats,
+    create_erlc_custom_action,
+    delete_erlc_custom_action,
     fetch_erlc_players,
     fetch_erlc_server,
     get_actor_member,
     get_modlogs_for_user,
     get_target_guild,
+    load_erlc_custom_actions,
     run_dashboard_ban_command,
     run_dashboard_command,
     run_dashboard_member_command,
     run_dashboard_unban_command,
+    run_erlc_custom_action,
     resolve_user_id,
     send_bot_message,
     send_custom_embed,
@@ -330,12 +334,14 @@ def _dashboard_context():
 
     erlc_server = {}
     erlc_players = []
+    erlc_custom_actions = []
     if feature_access.get("erlc"):
         try:
             erlc_server = run_async(fetch_erlc_server())
             erlc_players = run_async(fetch_erlc_players())
         except Exception:
             pass
+        erlc_custom_actions = load_erlc_custom_actions()
 
     modlog_user_id = request.args.get("modlog_user_id", "").strip()
     modlog_results = None
@@ -360,6 +366,7 @@ def _dashboard_context():
         "channels": sorted(guild.text_channels, key=lambda channel: channel.position),
         "erlc_server": erlc_server,
         "erlc_players": erlc_players[:25],
+        "erlc_custom_actions": erlc_custom_actions,
         "modlog_results": modlog_results,
         "modlog_user_id": modlog_user_id,
         "rank_order": RANK_ORDER,
@@ -481,6 +488,7 @@ def _json_dashboard_context():
         "channels": channels,
         "erlc_server": context["erlc_server"],
         "erlc_players": context["erlc_players"],
+        "erlc_custom_actions": context["erlc_custom_actions"],
         "modlog_results": context["modlog_results"],
         "modlog_user_id": context["modlog_user_id"],
         "rank_order": context["rank_order"],
@@ -682,6 +690,9 @@ def dashboard_action(action):
         "retire": ("staff_management", lambda: run_member_command("retire")),
         "reinstate": ("staff_management", lambda: run_member_command("reinstate")),
         "erlc_command": ("erlc", lambda: run_command("erlc command", {"command": request.form["command"]})),
+        "erlc_action_create": ("erlc", lambda: create_erlc_custom_action(actor_id, request.form)),
+        "erlc_action_delete": ("erlc", lambda: delete_erlc_custom_action(request.form["action_id"])),
+        "erlc_action_run": ("erlc", lambda: run_async(run_erlc_custom_action(bot, actor_id, request.form["action_id"]), timeout=420)),
         "partnership": (
             "partnerships",
             lambda: run_command(

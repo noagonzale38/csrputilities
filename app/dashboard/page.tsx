@@ -82,6 +82,7 @@ type DashboardData = {
   channels: Channel[];
   erlc_server: Record<string, any>;
   erlc_players: Record<string, any>[];
+  erlc_custom_actions: ErlcCustomAction[];
   modlog_results: Record<string, any>[] | null;
   modlog_user_id: string;
   rank_order: string[];
@@ -113,6 +114,25 @@ type EmbedDraft = {
   footerIconUrl: string;
   timestamp: boolean;
 };
+type ErlcCustomStep = {
+  type: "command" | "wait";
+  command?: string;
+  seconds?: number;
+};
+type ErlcCustomAction = {
+  id: string;
+  name: string;
+  steps: ErlcCustomStep[];
+  created_by?: string;
+  created_at?: number;
+  updated_at?: number;
+};
+type ErlcStepDraft = {
+  id: number;
+  type: "command" | "wait";
+  command: string;
+  seconds: string;
+};
 
 const DASHBOARD_TOAST_EVENT = "csrp-dashboard-toast";
 const DASHBOARD_DATA_REFRESH_EVENT = "csrp-dashboard-refresh";
@@ -143,6 +163,9 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   retire: "Staff Member Retired Successfully.",
   reinstate: "Staff Member Reinstated Successfully.",
   erlc_command: "Command Executed Successfully.",
+  erlc_action_create: "Custom ERLC Action Created Successfully.",
+  erlc_action_delete: "Custom ERLC Action Deleted Successfully.",
+  erlc_action_run: "Custom ERLC Action Executed Successfully.",
   partnership: "Partnership Sent Successfully.",
   modlogs_clear_user: "User Modlogs Cleared Successfully.",
   modlogs_clear_all: "All Modlogs Cleared Successfully.",
@@ -1887,7 +1910,120 @@ function Staff({ can }: { can: (key: string) => boolean }) {
 }
 
 function Erlc({ data }: { data: DashboardData }) {
-  return <Panel title="ERLC Controls" index={["Server Snapshot", "Command", "Players"]}><div className="two-col"><article className="setting-card"><h2>Server Snapshot</h2><p>Name: {fieldValue(data.erlc_server.Name)}</p><p>Players: {fieldValue(data.erlc_server.CurrentPlayers)}/{fieldValue(data.erlc_server.MaxPlayers)}</p><p>Join Key: {fieldValue(data.erlc_server.JoinKey)}</p></article><ActionForm action="erlc_command"><h2>Run Command</h2><input name="command" placeholder=":h Server restarting soon" required /><button className="button primary">Execute</button></ActionForm></div><article className="setting-card"><h2>Players</h2><div className="list-grid">{data.erlc_players.length ? data.erlc_players.map((player, index) => <div className="list-item" key={index}>{player.Player || "Unknown"}<span>{player.Team || "Unknown"}</span></div>) : <div className="list-item">No player data available.</div>}</div></article></Panel>;
+  const [steps, setSteps] = useState<ErlcStepDraft[]>([
+    { id: 1, type: "command", command: ":h Server restarting soon", seconds: "5" }
+  ]);
+  const customActions = data.erlc_custom_actions || [];
+  const updateStep = (id: number, patch: Partial<ErlcStepDraft>) => {
+    setSteps((current) => current.map((step) => (step.id === id ? { ...step, ...patch } : step)));
+  };
+  const addStep = () => {
+    setSteps((current) =>
+      current.length >= 10
+        ? current
+        : [...current, { id: Date.now(), type: "command", command: "", seconds: "5" }]
+    );
+  };
+  const removeStep = (id: number) => {
+    setSteps((current) => (current.length <= 1 ? current : current.filter((step) => step.id !== id)));
+  };
+  const stepLabel = (step: ErlcCustomStep, index: number) => {
+    if (step.type === "wait") return `${index + 1}. Wait ${step.seconds || 0}s`;
+    return `${index + 1}. ${step.command || "Command"}`;
+  };
+
+  return (
+    <Panel title="ERLC Controls" index={["Server Snapshot", "Command", "Custom Actions", "Players"]}>
+      <div className="two-col">
+        <article className="setting-card">
+          <h2>Server Snapshot</h2>
+          <p>Name: {fieldValue(data.erlc_server.Name)}</p>
+          <p>Players: {fieldValue(data.erlc_server.CurrentPlayers)}/{fieldValue(data.erlc_server.MaxPlayers)}</p>
+          <p>Join Key: {fieldValue(data.erlc_server.JoinKey)}</p>
+        </article>
+        <ActionForm action="erlc_command">
+          <h2>Run Command</h2>
+          <input name="command" placeholder=":h Server restarting soon" required />
+          <button className="button primary">Execute</button>
+        </ActionForm>
+      </div>
+
+      <div className="erlc-custom-grid">
+        <DashboardPostForm action="erlc_action_create" className="setting-card form-grid erlc-action-builder">
+          <div className="panel-title-row">
+            <h2>Create Custom Action</h2>
+            <button type="button" className="button ghost" onClick={addStep} disabled={steps.length >= 10}>
+              <Plus size={16} />
+              Add Step
+            </button>
+          </div>
+          <input name="name" placeholder="Action name" required maxLength={64} />
+          <div className="erlc-step-list">
+            {steps.map((step, index) => (
+              <div className="erlc-step-row" key={step.id}>
+                <input type="hidden" name="step_type" value={step.type} />
+                <input type="hidden" name="step_command" value={step.command} />
+                <input type="hidden" name="step_seconds" value={step.seconds} />
+                <span className="step-number">{index + 1}</span>
+                <select value={step.type} onChange={(event) => updateStep(step.id, { type: event.target.value as "command" | "wait" })} aria-label={`Step ${index + 1} type`}>
+                  <option value="command">Command</option>
+                  <option value="wait">Wait</option>
+                </select>
+                {step.type === "wait" ? (
+                  <input type="number" min={1} max={60} value={step.seconds} onChange={(event) => updateStep(step.id, { seconds: event.target.value })} placeholder="Seconds" />
+                ) : (
+                  <input value={step.command} onChange={(event) => updateStep(step.id, { command: event.target.value })} placeholder=":h Message or :m Announcement" />
+                )}
+                <button type="button" className="icon-button danger" aria-label={`Remove step ${index + 1}`} onClick={() => removeStep(step.id)} disabled={steps.length <= 1}>
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            ))}
+          </div>
+          <button className="button primary">Save Custom Action</button>
+        </DashboardPostForm>
+
+        <article className="setting-card">
+          <h2>Custom Actions</h2>
+          <div className="erlc-action-list">
+            {customActions.length ? (
+              customActions.map((action) => (
+                <div className="erlc-action-card" key={action.id}>
+                  <div>
+                    <strong>{action.name}</strong>
+                    <span>{action.steps.map(stepLabel).join("  |  ")}</span>
+                  </div>
+                  <div className="erlc-action-controls">
+                    <DashboardPostForm action="erlc_action_run" className="inline-action-form">
+                      <input type="hidden" name="action_id" value={action.id} />
+                      <button className="button primary">Run</button>
+                    </DashboardPostForm>
+                    <DashboardPostForm action="erlc_action_delete" className="inline-action-form">
+                      <input type="hidden" name="action_id" value={action.id} />
+                      <button className="icon-button danger" aria-label={`Delete ${action.name}`}>
+                        <Trash2 size={16} />
+                      </button>
+                    </DashboardPostForm>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="list-item">No custom ERLC actions yet.</div>
+            )}
+          </div>
+        </article>
+      </div>
+
+      <article className="setting-card">
+        <h2>Players</h2>
+        <div className="list-grid">
+          {data.erlc_players.length ? data.erlc_players.map((player, index) => (
+            <div className="list-item" key={index}>{player.Player || "Unknown"}<span>{player.Team || "Unknown"}</span></div>
+          )) : <div className="list-item">No player data available.</div>}
+        </div>
+      </article>
+    </Panel>
+  );
 }
 
 function Partnerships({ channels }: { channels: Channel[] }) {

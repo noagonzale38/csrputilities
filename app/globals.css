@@ -1023,6 +1023,86 @@ option {
   width: auto;
 }
 
+.erlc-custom-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.erlc-step-list,
+.erlc-action-list {
+  display: grid;
+  gap: 12px;
+}
+
+.erlc-step-row {
+  display: grid;
+  grid-template-columns: 32px 120px minmax(0, 1fr) 40px;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--field);
+}
+
+.step-number {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--muted-strong);
+  font-size: .82rem;
+  font-weight: 950;
+}
+
+.erlc-action-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--field);
+}
+
+.erlc-action-card strong,
+.erlc-action-card span {
+  display: block;
+  min-width: 0;
+}
+
+.erlc-action-card strong {
+  color: var(--text);
+}
+
+.erlc-action-card span {
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: .86rem;
+  line-height: 1.45;
+}
+
+.erlc-action-controls,
+.inline-action-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.inline-action-form {
+  margin: 0;
+}
+
+.inline-action-form .button {
+  min-height: 40px;
+}
+
 .embed-builder {
   display: grid;
   grid-template-columns: minmax(320px, 1.05fr) minmax(320px, .95fr);
@@ -1862,6 +1942,10 @@ option {
     grid-template-columns: 1fr;
   }
 
+  .erlc-custom-grid {
+    grid-template-columns: 1fr;
+  }
+
   .embed-builder {
     grid-template-columns: 1fr;
   }
@@ -2029,6 +2113,15 @@ option {
 
   .rank-role-grid {
     grid-template-columns: 1fr;
+  }
+
+  .erlc-step-row,
+  .erlc-action-card {
+    grid-template-columns: 1fr;
+  }
+
+  .erlc-action-controls {
+    justify-content: flex-start;
   }
 
   .theme-view-actions .button,
