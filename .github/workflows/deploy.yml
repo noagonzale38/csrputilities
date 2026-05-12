@@ -1,0 +1,25 @@
+name: Deploy CSRP Utilities
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+
+            git config --global url."https://${{ secrets.GH_PAT }}@github.com/".insteadOf "https://github.com/"
+            cd /home/ubuntu/CSRP\ Utilities
+            ./update.sh
