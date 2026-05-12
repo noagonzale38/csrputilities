@@ -308,6 +308,7 @@ class Utility(commands.Cog):
 
     @commands.hybrid_command(name="dashboard", description="Get a link to the CSRP Utilities Dashboard.")
     async def dashboard(self, ctx):
+        guild = ctx.guild
         embed = discord.Embed(title="Dashboard", description="To visit the CSRP Utilities Dashboard, click [here](https://dashstaging.officialcaliforniastateroleplay.com).", color=BLANK_COLOR, timestamp=discord.utils.utcnow())
         embed.set_author(name=guild.name, icon_url=guild.icon.url if guild.icon else "")
         if guild.icon:
