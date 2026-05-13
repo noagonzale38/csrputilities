@@ -2,7 +2,7 @@ import copy
 import json
 from typing import Iterable
 
-from config import BOT_ADMINISTRATION
+from cogs.settings import DEFAULT_PERMISSION_ROLE_SETTINGS
 
 PERMISSIONS_FILE = "dashboard_permissions.json"
 
@@ -22,7 +22,7 @@ FEATURES = [
 ]
 
 DEFAULT_PERMISSIONS = {
-    "full_access_roles": list(BOT_ADMINISTRATION),
+    "full_access_roles": list(DEFAULT_PERMISSION_ROLE_SETTINGS["bot_dev"]),
     "features": {feature_key: [] for feature_key, _ in FEATURES},
 }
 

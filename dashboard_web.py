@@ -22,8 +22,7 @@ from flask import (
 from flask_cors import CORS
 from dotenv import dotenv_values
 
-from config import BOT_ADMINISTRATION
-from cogs.settings import RANK_ORDER, get_guild_settings
+from cogs.settings import PERMISSION_ROLE_LABELS, PERMISSION_USER_LABELS, RANK_ORDER, get_guild_settings
 from dashboard_actions import (
     blacklist_command_user,
     clear_all_modlogs,
@@ -370,7 +369,8 @@ def _dashboard_context():
         "modlog_results": modlog_results,
         "modlog_user_id": modlog_user_id,
         "rank_order": RANK_ORDER,
-        "bot_admin_roles": BOT_ADMINISTRATION,
+        "permission_role_labels": PERMISSION_ROLE_LABELS,
+        "permission_user_labels": PERMISSION_USER_LABELS,
         "dashboard_environment_label": _dashboard_environment_label(),
     }
 
@@ -430,6 +430,14 @@ def _settings_payload(settings):
     payload["rank_roles"] = {
         rank: str(role_id) if role_id else ""
         for rank, role_id in settings.get("rank_roles", {}).items()
+    }
+    payload["permission_roles"] = {
+        key: [str(role_id) for role_id in role_ids]
+        for key, role_ids in settings.get("permission_roles", {}).items()
+    }
+    payload["permission_users"] = {
+        key: [str(user_id) for user_id in user_ids]
+        for key, user_ids in settings.get("permission_users", {}).items()
     }
     return payload
 
@@ -492,7 +500,8 @@ def _json_dashboard_context():
         "modlog_results": context["modlog_results"],
         "modlog_user_id": context["modlog_user_id"],
         "rank_order": context["rank_order"],
-        "bot_admin_roles": [str(role_id) for role_id in context["bot_admin_roles"]],
+        "permission_role_labels": context["permission_role_labels"],
+        "permission_user_labels": context["permission_user_labels"],
     }
 
 

@@ -8,7 +8,7 @@ import random
 from datetime import timedelta
 
 from config import (
-    MODERATION_ROLE_IDS, INFRACTION_CHANNEL, APPEALS_CHANNEL_ID,
+    INFRACTION_CHANNEL, APPEALS_CHANNEL_ID,
     modlogs_file, casefile, is_moderation, is_role_authorized, is_bot_dev, BOT_OWNER_ID,
 )
 from cogs.helpers import (
@@ -16,6 +16,7 @@ from cogs.helpers import (
     success_embed, error_embed, info_embed, warning_embed, brand_footer, embed_description,
     ConfirmView, PaginatorView, generalised_interaction_check_failure,
 )
+from cogs.settings import get_permission_role_ids
 
 
 def save_modlog(user_id, action, reason, moderator_id, case_id):
@@ -88,6 +89,11 @@ class Moderation(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.infractions = {}
+
+    @staticmethod
+    def _is_protected_moderator(member: discord.Member) -> bool:
+        moderation_role_ids = set(get_permission_role_ids(member.guild.id, "moderation"))
+        return bool({role.id for role in member.roles} & moderation_role_ids)
 
     async def _resolve_restriction_bypass(self, ctx, text: str):
         cleaned_text, bypass_requested = extract_ignore_restrictions_flag(text)
@@ -190,7 +196,7 @@ class Moderation(commands.Cog):
     @is_moderation()
     @app_commands.describe(user="The user to kick", reason="The reason for kicking the user")
     async def kick(self, ctx, user: discord.Member, *, reason: str):
-        if any(role.id in MODERATION_ROLE_IDS for role in user.roles):
+        if self._is_protected_moderator(user):
             await ctx.send(embed=error_embed("Cannot Kick User", "I cannot kick other moderators or administrators."))
             return
 
@@ -245,7 +251,7 @@ class Moderation(commands.Cog):
         user_id = None
 
         if isinstance(user, discord.Member):
-            if not ignore_restrictions and any(role.id in MODERATION_ROLE_IDS for role in user.roles):
+            if not ignore_restrictions and self._is_protected_moderator(user):
                 await ctx.send(embed=error_embed("Cannot Ban User", "I cannot ban other moderators or administrators."))
                 return
             member_to_ban = user
@@ -260,7 +266,7 @@ class Moderation(commands.Cog):
 
             try:
                 member_to_ban = await ctx.guild.fetch_member(user_id)
-                if not ignore_restrictions and any(role.id in MODERATION_ROLE_IDS for role in member_to_ban.roles):
+                if not ignore_restrictions and self._is_protected_moderator(member_to_ban):
                     await ctx.send(embed=error_embed("Cannot Ban User", "I cannot ban other moderators or administrators."))
                     return
             except discord.NotFound:
@@ -372,7 +378,7 @@ class Moderation(commands.Cog):
             await ctx.send(embed=error_embed("Missing Reason", "Please provide a reason for the mute."))
             return
 
-        if not ignore_restrictions and any(role.id in MODERATION_ROLE_IDS for role in user.roles):
+        if not ignore_restrictions and self._is_protected_moderator(user):
             await ctx.send(embed=error_embed("Cannot Mute User", "I cannot mute other moderators or administrators."))
             return
 
@@ -459,7 +465,7 @@ class Moderation(commands.Cog):
             await ctx.send(embed=error_embed("Missing Reason", "Please provide a reason for the warning."))
             return
 
-        if not ignore_restrictions and any(role.id in MODERATION_ROLE_IDS for role in user.roles):
+        if not ignore_restrictions and self._is_protected_moderator(user):
             await ctx.send(embed=error_embed("Cannot Warn User", "I cannot warn other moderators or administrators."))
             return
 

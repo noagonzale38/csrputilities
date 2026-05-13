@@ -4,6 +4,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from discord.ext import commands
 
+from cogs.settings import get_permission_role_ids, get_permission_user_ids
+
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(dotenv_path=BASE_DIR / ".env")
 
@@ -141,47 +143,64 @@ def _role_check(role_ids):
     return commands.check(predicate)
 
 
-def is_moderation():
-    return _role_check(MODERATION_ROLE_IDS)
-
-def is_noah_or_directive():
-    return _role_check(NOAH_DIR)
-
-def is_sales_authorized():
-    return _role_check(SALES_ROLE_IDS)
-
-def is_bot_dev():
-    return _role_check(BOT_ADMINISTRATION)
-
-def is_training_instructor():
-    return _role_check(ALLOWED_TI_IDS)
-
-def is_role_authorized():
-    return _role_check(AUTHORIZED_ROLE_IDS)
-
-def is_session_permitted():
-    return _role_check(PERMITTED_SESSION_ROLE_IDS)
-
-def is_support():
-    return _role_check(SUPPORT_IDS)
-
-def is_bot_staff():
-    return _role_check(DEV_ROLE_IDS)
-
-def is_authorized():
+def _configured_role_check(permission_key):
     async def predicate(ctx):
         if not ctx.guild:
             raise commands.NoPrivateMessage()
-        if ctx.author.id not in AUTHORIZED_USERS:
-            raise commands.CheckFailure("You are not permitted to use this command.")
-        return True
+        configured_role_ids = get_permission_role_ids(ctx.guild.id, permission_key)
+        user_role_ids = {role.id for role in ctx.author.roles}
+        if user_role_ids & set(configured_role_ids):
+            return True
+        raise commands.CheckFailure("You are not permitted to use this command")
     return commands.check(predicate)
 
+
+def _configured_user_check(permission_key):
+    async def predicate(ctx):
+        if not ctx.guild:
+            raise commands.NoPrivateMessage()
+        if ctx.author.id in set(get_permission_user_ids(ctx.guild.id, permission_key)):
+            return True
+        raise commands.CheckFailure("You are not permitted to use this command.")
+    return commands.check(predicate)
+
+
+def is_moderation():
+    return _configured_role_check("moderation")
+
+def is_noah_or_directive():
+    return _configured_role_check("noah_or_directive")
+
+def is_sales_authorized():
+    return _configured_role_check("sales_authorized")
+
+def is_bot_dev():
+    return _configured_role_check("bot_dev")
+
+def is_training_instructor():
+    return _configured_role_check("training_instructor")
+
+def is_role_authorized():
+    return _configured_role_check("role_authorized")
+
+def is_session_permitted():
+    return _configured_role_check("session_permitted")
+
+def is_support():
+    return _configured_role_check("support")
+
+def is_bot_staff():
+    return _configured_role_check("bot_staff")
+
+def is_authorized():
+    return _configured_user_check("authorized")
+
 def is_authorized_user_or_role(ctx):
-    if ctx.author.id in SUPPORT_USERS:
+    if ctx.author.id in set(get_permission_user_ids(ctx.guild.id, "support")):
         return True
+    authorized_role_ids = set(get_permission_role_ids(ctx.guild.id, "role_authorized"))
     for role in ctx.author.roles:
-        if role.id == AUTHORIZED_ROLE_IDS[0]:
+        if role.id in authorized_role_ids:
             return True
     raise commands.CheckFailure("You don't have permission to use this command.")
 

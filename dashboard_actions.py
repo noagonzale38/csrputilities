@@ -26,7 +26,17 @@ from cogs.moderation import (
     parse_time,
     save_modlog,
 )
-from cogs.settings import DEFAULT_SETTINGS, RANK_ORDER, get_guild_settings, update_guild_setting, update_rank_role
+from cogs.settings import (
+    DEFAULT_SETTINGS,
+    PERMISSION_ROLE_LABELS,
+    PERMISSION_USER_LABELS,
+    RANK_ORDER,
+    get_guild_settings,
+    update_guild_setting,
+    update_permission_role_setting,
+    update_permission_user_setting,
+    update_rank_role,
+)
 from cogs.staffmgmt import (
     DEMOTION_MAP,
     _can_manage_rank,
@@ -979,4 +989,18 @@ async def update_dashboard_settings(guild_id: int, form_data: dict) -> str:
     for rank in RANK_ORDER:
         raw_value = form_data.get(f"rank::{rank}", "").strip()
         update_rank_role(guild_id, rank, int(raw_value) if raw_value else None)
+
+    for permission_key in PERMISSION_ROLE_LABELS:
+        role_ids = [int(value) for value in _values(f"permission_role::{permission_key}")]
+        update_permission_role_setting(guild_id, permission_key, role_ids)
+
+    for permission_key in PERMISSION_USER_LABELS:
+        raw_value = str(form_data.get(f"permission_user::{permission_key}", "")).strip()
+        parsed_user_ids = []
+        for value in raw_value.replace(",", "\n").splitlines():
+            value = value.strip()
+            if not value:
+                continue
+            parsed_user_ids.append(int(value))
+        update_permission_user_setting(guild_id, permission_key, parsed_user_ids)
     return "Updated bot settings."

@@ -11,6 +11,83 @@ from cogs.helpers import (
 
 SETTINGS_FILE = "guild_settings.json"
 
+DEFAULT_PERMISSION_ROLE_SETTINGS = {
+    "moderation": [
+        1137117556348567614,
+        1131166127964291172,
+        1157648329619021844,
+        985228543191548004,
+        968847690286903318,
+        1331830954972549153,
+        1320942467880583259,
+        1337512102977605663,
+        1337511934769234051,
+    ],
+    "noah_or_directive": [1408307735329767585, 985228543191548004],
+    "sales_authorized": [
+        1137117556348567614,
+        1137129271769436340,
+        1157648329619021844,
+        1131166127964291172,
+        985228543191548004,
+    ],
+    "bot_dev": [1340433106217205903, 968847690286903318, 985228543191548004, 1374173264330625155],
+    "training_instructor": [1131912432957263994, 1137129271769436340],
+    "role_authorized": [
+        1137117556348567614,
+        1131166127964291172,
+        1157648329619021844,
+        985228543191548004,
+        968847690286903318,
+        1331830954972549153,
+    ],
+    "session_permitted": [1131166127964291172, 1157648329619021844, 985228543191548004, 968847690286903318, 1321363819519283220],
+    "support": [1341282970966954024, 1323534294240727131, 1331830954972549153, 1323534294257500161, 1374173264330625155, 1362304603445657611, 1432238694626230283, 946398082462011403, 1220440120658890792, 1458893408151277844],
+    "bot_staff": [1340433106217205903, 1321363819519283220, 1323534294257500162, 1374173264330625155],
+}
+
+DEFAULT_PERMISSION_USER_SETTINGS = {
+    "authorized": [
+        1213915425369227334,
+        1218053009834246156,
+        736978544869113927,
+        826930759016120331,
+        1109142957866619013,
+        793162371702194207,
+        778630075071332372,
+        708643165514498068,
+    ],
+    "support": [
+        1213915425369227334,
+        1218053009834246156,
+        736978544869113927,
+        826930759016120331,
+        1220440120658890792,
+        1109142957866619013,
+        614895781832556585,
+        946398082462011403,
+        1224798895129890957,
+        654110914311618561,
+    ],
+}
+
+PERMISSION_ROLE_LABELS = {
+    "moderation": "Moderation",
+    "noah_or_directive": "Noah / Directive",
+    "sales_authorized": "Sales",
+    "bot_dev": "Bot Developers",
+    "training_instructor": "Training Instructors",
+    "role_authorized": "Authorized Roles",
+    "session_permitted": "Session Permitted",
+    "support": "Support Roles",
+    "bot_staff": "Bot Staff",
+}
+
+PERMISSION_USER_LABELS = {
+    "authorized": "Authorized Users",
+    "support": "Support Users",
+}
+
 DEFAULT_SETTINGS = {
     "staff_roles": [],
     "retirement_log_channel": None,
@@ -31,9 +108,23 @@ DEFAULT_SETTINGS = {
         "Senior Moderator": None,
         "Moderator": None,
     },
+    "permission_roles": copy.deepcopy(DEFAULT_PERMISSION_ROLE_SETTINGS),
+    "permission_users": copy.deepcopy(DEFAULT_PERMISSION_USER_SETTINGS),
 }
 
 RANK_ORDER = list(DEFAULT_SETTINGS["rank_roles"].keys())
+
+
+def _merge_defaults(target: dict, defaults: dict) -> bool:
+    changed = False
+    for key, value in defaults.items():
+        if key not in target:
+            target[key] = copy.deepcopy(value)
+            changed = True
+            continue
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            changed = _merge_defaults(target[key], value) or changed
+    return changed
 
 
 def load_settings() -> dict:
@@ -56,9 +147,8 @@ def get_guild_settings(guild_id: int) -> dict:
         data[key] = copy.deepcopy(DEFAULT_SETTINGS)
         save_settings(data)
     settings = data[key]
-    for k, v in DEFAULT_SETTINGS.items():
-        if k not in settings:
-            settings[k] = copy.deepcopy(v)
+    if _merge_defaults(settings, DEFAULT_SETTINGS):
+        save_settings(data)
     return settings
 
 
@@ -91,6 +181,54 @@ def has_setting_permission(guild_id: int, setting_key: str, member: discord.Memb
     return bool(member_role_ids & set(allowed))
 
 
+def get_permission_role_ids(guild_id: int, permission_key: str) -> list[int]:
+    settings = get_guild_settings(guild_id)
+    role_ids = settings.get("permission_roles", {}).get(permission_key, [])
+    return [int(role_id) for role_id in role_ids if str(role_id).strip()]
+
+
+def get_permission_user_ids(guild_id: int, permission_key: str) -> list[int]:
+    settings = get_guild_settings(guild_id)
+    user_ids = settings.get("permission_users", {}).get(permission_key, [])
+    return [int(user_id) for user_id in user_ids if str(user_id).strip()]
+
+
+def update_permission_role_setting(guild_id: int, permission_key: str, role_ids: list[int]):
+    data = load_settings()
+    gkey = str(guild_id)
+    if gkey not in data:
+        data[gkey] = copy.deepcopy(DEFAULT_SETTINGS)
+    if "permission_roles" not in data[gkey]:
+        data[gkey]["permission_roles"] = copy.deepcopy(DEFAULT_PERMISSION_ROLE_SETTINGS)
+    data[gkey]["permission_roles"][permission_key] = sorted({int(role_id) for role_id in role_ids})
+    save_settings(data)
+
+
+def update_permission_user_setting(guild_id: int, permission_key: str, user_ids: list[int]):
+    data = load_settings()
+    gkey = str(guild_id)
+    if gkey not in data:
+        data[gkey] = copy.deepcopy(DEFAULT_SETTINGS)
+    if "permission_users" not in data[gkey]:
+        data[gkey]["permission_users"] = copy.deepcopy(DEFAULT_PERMISSION_USER_SETTINGS)
+    data[gkey]["permission_users"][permission_key] = sorted({int(user_id) for user_id in user_ids})
+    save_settings(data)
+
+
+def member_has_permission(member: discord.Member, *, role_keys: list[str] | None = None, user_keys: list[str] | None = None) -> bool:
+    settings = get_guild_settings(member.guild.id)
+    if user_keys:
+        configured_users = settings.get("permission_users", {})
+        if any(member.id in {int(user_id) for user_id in configured_users.get(user_key, [])} for user_key in user_keys):
+            return True
+    if role_keys:
+        member_role_ids = {role.id for role in member.roles}
+        configured_roles = settings.get("permission_roles", {})
+        if any(member_role_ids & {int(role_id) for role_id in configured_roles.get(role_key, [])} for role_key in role_keys):
+            return True
+    return False
+
+
 def dashboard_embed(guild: discord.Guild) -> discord.Embed:
     settings = get_guild_settings(guild.id)
 
@@ -120,7 +258,8 @@ def dashboard_embed(guild: discord.Guild) -> discord.Embed:
         f"**Partnership Permissions:** {partner}\n"
         f"**Embed Creation Permissions:** {embed_roles}\n"
         f"**Retire/Reinstate Permissions:** {retire}\n\n"
-        f"**Rank Roles:**\n{rank_text}"
+        f"**Rank Roles:**\n{rank_text}\n\n"
+        f"**Command Permission Checks:** Configure these from the Permission Checks menu."
     )
 
     embed = discord.Embed(title="Server Settings", description=desc, color=BLANK_COLOR)
@@ -153,6 +292,7 @@ class DashboardView(discord.ui.View):
             discord.SelectOption(label="Embed Creation Permissions", value="embed_allowed_roles", description="Who can use /embed create"),
             discord.SelectOption(label="Retire/Reinstate Permissions", value="retire_allowed_roles", description="Who can use /retire & /reinstate"),
             discord.SelectOption(label="Rank Role Mapping", value="rank_roles", description="Map ranks to Discord roles"),
+            discord.SelectOption(label="Permission Checks", value="permission_checks", description="Configure role/user-based command permissions"),
         ],
     )
     async def select_setting(self, interaction: discord.Interaction, select: discord.ui.Select):
@@ -215,6 +355,185 @@ class DashboardView(discord.ui.View):
         elif choice == "rank_roles":
             view = RankRolesMenuView(self.guild, self.author)
             await interaction.response.edit_message(embed=view.get_embed(), view=view)
+        elif choice == "permission_checks":
+            view = PermissionConfigMenuView(self.guild, self.author)
+            await interaction.response.edit_message(embed=view.get_embed(), view=view)
+
+
+class PermissionConfigMenuView(discord.ui.View):
+    def __init__(self, guild, author):
+        super().__init__(timeout=300)
+        self.guild = guild
+        self.author = author
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author.id:
+            await interaction.response.send_message("You cannot use this.", ephemeral=True)
+            return False
+        return True
+
+    def get_embed(self):
+        settings = get_guild_settings(self.guild.id)
+        role_lines = []
+        for key, label in PERMISSION_ROLE_LABELS.items():
+            role_count = len(settings.get("permission_roles", {}).get(key, []))
+            role_lines.append(f"> **{label}:** `{role_count}` role(s)")
+        user_lines = []
+        for key, label in PERMISSION_USER_LABELS.items():
+            user_count = len(settings.get("permission_users", {}).get(key, []))
+            user_lines.append(f"> **{label}:** `{user_count}` user(s)")
+        embed = discord.Embed(
+            title="Configure: Permission Checks",
+            description=(
+                "Select a permission rule below to edit who can pass that check.\n\n"
+                "**Role-based checks**\n"
+                + "\n".join(role_lines)
+                + "\n\n**User-based checks**\n"
+                + "\n".join(user_lines)
+            ),
+            color=BLANK_COLOR,
+        )
+        brand_footer(embed)
+        return embed
+
+    @discord.ui.select(
+        placeholder="Select a permission rule...",
+        options=[
+            *[discord.SelectOption(label=label, value=f"role::{key}", description=f"Configure roles for {label.lower()} checks") for key, label in PERMISSION_ROLE_LABELS.items()],
+            *[discord.SelectOption(label=label, value=f"user::{key}", description=f"Configure users for {label.lower()} checks") for key, label in PERMISSION_USER_LABELS.items()],
+        ],
+    )
+    async def permission_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        choice = select.values[0]
+        kind, key = choice.split("::", 1)
+        if kind == "role":
+            view = PermissionRoleConfigView(self.guild, self.author, key, PERMISSION_ROLE_LABELS[key])
+            embed = discord.Embed(
+                title=f"Configure Roles: {PERMISSION_ROLE_LABELS[key]}",
+                description="Select the roles that should satisfy this permission check.",
+                color=BLANK_COLOR,
+            )
+        else:
+            view = PermissionUsersView(self.guild, self.author, key, PERMISSION_USER_LABELS[key])
+            embed = view.get_embed()
+        brand_footer(embed)
+        await interaction.response.edit_message(embed=embed, view=view)
+
+    @discord.ui.button(label="Back to Settings", style=discord.ButtonStyle.secondary, row=2)
+    async def back_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = DashboardView(self.guild, self.author)
+        await interaction.response.edit_message(embed=dashboard_embed(self.guild), view=view)
+
+
+class PermissionRoleConfigView(discord.ui.View):
+    def __init__(self, guild, author, permission_key, label):
+        super().__init__(timeout=120)
+        self.guild = guild
+        self.author = author
+        self.permission_key = permission_key
+        self.label = label
+        self.selected_roles = list(get_permission_role_ids(guild.id, permission_key))
+
+        current_roles = [guild.get_role(role_id) for role_id in self.selected_roles]
+        current_roles = [role for role in current_roles if role is not None][:25]
+        for child in self.children:
+            if isinstance(child, discord.ui.RoleSelect):
+                child.default_values = current_roles
+                break
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author.id:
+            await interaction.response.send_message("You cannot use this.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.select(cls=discord.ui.RoleSelect, placeholder="Select roles...", min_values=0, max_values=25)
+    async def role_select(self, interaction: discord.Interaction, select: discord.ui.RoleSelect):
+        self.selected_roles = [role.id for role in select.values]
+        await interaction.response.defer()
+
+    @discord.ui.button(label="Save", style=discord.ButtonStyle.green, row=2)
+    async def save_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        update_permission_role_setting(self.guild.id, self.permission_key, self.selected_roles)
+        view = PermissionConfigMenuView(self.guild, self.author)
+        await interaction.response.edit_message(embed=view.get_embed(), view=view)
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, row=2)
+    async def back_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = PermissionConfigMenuView(self.guild, self.author)
+        await interaction.response.edit_message(embed=view.get_embed(), view=view)
+
+
+class PermissionUsersModal(discord.ui.Modal):
+    user_ids = discord.ui.TextInput(
+        label="Discord user IDs",
+        style=discord.TextStyle.paragraph,
+        placeholder="One user ID per line or comma-separated",
+        required=False,
+        max_length=1000,
+    )
+
+    def __init__(self, guild, author, permission_key, label, original_message):
+        super().__init__(title=f"Edit Users: {label}")
+        self.guild = guild
+        self.author = author
+        self.permission_key = permission_key
+        self.label = label
+        self.original_message = original_message
+        current_users = get_permission_user_ids(guild.id, permission_key)
+        self.user_ids.default = "\n".join(str(user_id) for user_id in current_users)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw = self.user_ids.value.replace(",", "\n")
+        parsed_user_ids = []
+        for value in raw.splitlines():
+            value = value.strip()
+            if not value:
+                continue
+            if not value.isdigit():
+                await interaction.response.send_message(f"`{value}` is not a valid Discord user ID.", ephemeral=True)
+                return
+            parsed_user_ids.append(int(value))
+        update_permission_user_setting(self.guild.id, self.permission_key, parsed_user_ids)
+        await interaction.response.defer()
+        view = PermissionConfigMenuView(self.guild, self.author)
+        await self.original_message.edit(embed=view.get_embed(), view=view)
+
+
+class PermissionUsersView(discord.ui.View):
+    def __init__(self, guild, author, permission_key, label):
+        super().__init__(timeout=120)
+        self.guild = guild
+        self.author = author
+        self.permission_key = permission_key
+        self.label = label
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author.id:
+            await interaction.response.send_message("You cannot use this.", ephemeral=True)
+            return False
+        return True
+
+    def get_embed(self):
+        current_users = get_permission_user_ids(self.guild.id, self.permission_key)
+        description = "\n".join(f"> `{user_id}`" for user_id in current_users) or "> None"
+        embed = discord.Embed(
+            title=f"Configure Users: {self.label}",
+            description=f"Current allowed users:\n{description}\n\nClick **Edit Users** to update the list.",
+            color=BLANK_COLOR,
+        )
+        brand_footer(embed)
+        return embed
+
+    @discord.ui.button(label="Edit Users", style=discord.ButtonStyle.primary)
+    async def edit_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = PermissionUsersModal(self.guild, self.author, self.permission_key, self.label, interaction.message)
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
+    async def back_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = PermissionConfigMenuView(self.guild, self.author)
+        await interaction.response.edit_message(embed=view.get_embed(), view=view)
 
 
 class RoleConfigView(discord.ui.View):
@@ -495,6 +814,7 @@ class Settings(commands.Cog):
                 "> `6.` **Embed Creation Permissions** — who can use /embed create\n"
                 "> `7.` **Retire/Reinstate Permissions** — who can use /retire & /reinstate\n"
                 "> `8.` **Rank Roles** — map rank names to Discord roles\n"
+                "> `9.` **Permission Checks** — replace hardcoded command access rules\n"
             ),
             color=BLANK_COLOR,
         )

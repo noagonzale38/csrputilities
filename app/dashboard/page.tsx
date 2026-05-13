@@ -86,6 +86,8 @@ type DashboardData = {
   modlog_results: Record<string, any>[] | null;
   modlog_user_id: string;
   rank_order: string[];
+  permission_role_labels: Record<string, string>;
+  permission_user_labels: Record<string, string>;
 };
 type ToastKind = "success" | "error";
 type DashboardToast = {
@@ -2199,7 +2201,7 @@ function BotUpdates({ channels }: { channels: Channel[] }) {
 
 function BotSettings({ data }: { data: DashboardData }) {
   return (
-    <Panel title="Basic Settings" index={["Staff Roles", "Channels", "Feedback", "Rank Roles"]}>
+    <Panel title="Basic Settings" index={["Staff Roles", "Channels", "Feedback", "Rank Roles", "Permission Checks"]}>
       <DashboardPostForm action="settings_save" className="settings-form">
         <article className="setting-card">
           <h2>Staff Roles</h2>
@@ -2251,6 +2253,38 @@ function BotSettings({ data }: { data: DashboardData }) {
               <label key={rank}>
                 {rank}
                 <RoleSelect name={`rank::${rank}`} roles={data.roles} selected={data.settings.rank_roles?.[rank]} multiple={false} />
+              </label>
+            ))}
+          </div>
+        </article>
+
+        <article className="setting-card wide-card">
+          <h2>Command Permission Checks</h2>
+          <div className="rank-role-grid">
+            {Object.entries(data.permission_role_labels).map(([key, label]) => (
+              <label key={key}>
+                {label}
+                <RoleSelect
+                  name={`permission_role::${key}`}
+                  roles={data.roles}
+                  selected={data.settings.permission_roles?.[key] || []}
+                />
+              </label>
+            ))}
+          </div>
+        </article>
+
+        <article className="setting-card wide-card">
+          <h2>User-Based Permission Checks</h2>
+          <div className="rank-role-grid">
+            {Object.entries(data.permission_user_labels).map(([key, label]) => (
+              <label key={key}>
+                {label}
+                <textarea
+                  name={`permission_user::${key}`}
+                  defaultValue={(data.settings.permission_users?.[key] || []).join("\n")}
+                  placeholder="One Discord user ID per line"
+                />
               </label>
             ))}
           </div>

@@ -5,13 +5,14 @@ import time
 
 from config import (
     SERVER_KEY, CHANNEL_ID, SESSION_CHANNEL,
-    AUTHORIZED_USERS, is_role_authorized, is_session_permitted,
+    is_role_authorized, is_session_permitted,
 )
 from cogs.helpers import (
     Colors, BLANK_COLOR, CSRP_ICON, SESSION_IMAGE, CHECK, CROSS,
     success_embed, error_embed, info_embed, brand_footer, embed_description,
     api_get, generalised_interaction_check_failure,
 )
+from cogs.settings import get_permission_user_ids
 
 PingEnabled = False
 SESSION_INFO_RUNNING = False
@@ -48,9 +49,16 @@ class SessionControlView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
+    @staticmethod
+    def _is_authorized(interaction: discord.Interaction) -> bool:
+        if interaction.guild is None:
+            return False
+        authorized_users = set(get_permission_user_ids(interaction.guild.id, "authorized"))
+        return interaction.user.id in authorized_users
+
     @discord.ui.button(label="SSD (Stop Pings)", style=discord.ButtonStyle.danger, custom_id="ssd_button")
     async def stop_pings(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id not in AUTHORIZED_USERS:
+        if not self._is_authorized(interaction):
             await generalised_interaction_check_failure(interaction)
             return
         global PingEnabled
@@ -59,7 +67,7 @@ class SessionControlView(discord.ui.View):
 
     @discord.ui.button(label="SSU (Start Pings)", style=discord.ButtonStyle.green, custom_id="ssu_button")
     async def start_pings(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id not in AUTHORIZED_USERS:
+        if not self._is_authorized(interaction):
             await generalised_interaction_check_failure(interaction)
             return
         await interaction.response.send_message(embed=success_embed("SSU Activated", "SSU activated. Pings will resume in 5 minutes."), ephemeral=True)
