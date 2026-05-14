@@ -120,7 +120,7 @@ export default function EvidenceViewer({ code }: { code: string }) {
             <div>
               <AlertTriangle size={42} />
               <h2>Sensitive evidence</h2>
-              <p>This evidence was marked as sensitive by moderation staff. Continue only if you are prepared to view potentially disturbing content.</p>
+              <p>This evidence was marked as sensitive by staff. There may be potentially disturbing content linked here as evidence. Please only proceed if you are sure you want to continue to view this content.</p>
               <button className="button danger" onClick={() => setAcceptedSensitiveWarning(true)}>
                 View Evidence
               </button>
