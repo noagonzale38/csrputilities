@@ -43,6 +43,45 @@ class Utility(commands.Cog):
         self.bot = bot
         self.start_time = start_time
 
+    async def _send_partnership_log(self, ctx: commands.Context, target_channel, content: str, message_link: str = None, sent_message=None):
+        settings = get_guild_settings(ctx.guild.id)
+        log_channel_id = settings.get("partnership_log_channel")
+        if not log_channel_id:
+            return
+
+        try:
+            log_channel = self.bot.get_channel(int(log_channel_id))
+        except (TypeError, ValueError):
+            return
+        if log_channel is None:
+            return
+
+        source = "Dashboard" if ctx.__class__.__name__ == "DashboardCommandContext" else "Bot Command"
+        content_preview = content or "(No text content)"
+        if len(content_preview) > 1024:
+            content_preview = f"{content_preview[:1021]}..."
+
+        embed = discord.Embed(
+            title="Partnership Sent",
+            color=discord.Color.yellow(),
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.add_field(name="Sent By", value=f"{ctx.author.mention} (`{ctx.author.id}`)", inline=False)
+        embed.add_field(name="Source", value=source, inline=True)
+        embed.add_field(name="Destination", value=getattr(target_channel, "mention", f"`{target_channel.id}`"), inline=True)
+        embed.add_field(name="Content", value=content_preview, inline=False)
+        if message_link:
+            embed.add_field(name="Source Message", value=message_link, inline=False)
+        jump_url = getattr(sent_message, "jump_url", None)
+        if jump_url:
+            embed.add_field(name="Sent Message", value=jump_url, inline=False)
+        brand_footer(embed)
+
+        try:
+            await log_channel.send(embed=embed)
+        except discord.HTTPException:
+            pass
+
     def _iter_slash_commands(self):
         for command in self.bot.tree.walk_commands():
             if isinstance(command, app_commands.ContextMenu):
@@ -742,13 +781,19 @@ class Utility(commands.Cog):
                 await ctx.send(embed=error_embed("Fetch Failed", "Could not fetch the linked message."))
                 return
 
+        target_channel = getattr(ctx, "channel", None)
+        if target_channel is None:
+            await ctx.send(embed=error_embed("Channel Not Found", "Select a channel for the partnership."))
+            return
+
         embed = discord.Embed(
             title="Partnership",
             description=content,
             color=discord.Color.yellow(),
         )
         embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else CSRP_ICON)
-        await ctx.send(embed=embed)
+        sent_message = await ctx.send(embed=embed)
+        await self._send_partnership_log(ctx, target_channel, content, message_link, sent_message)
 
 
 async def setup(bot):

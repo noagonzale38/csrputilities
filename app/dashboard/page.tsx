@@ -599,6 +599,18 @@ function buildCustomTheme(draft: ThemeDraft): ThemeDefinition {
   };
 }
 
+function copyThemeForEditor(theme: ThemeDefinition): ThemeDefinition {
+  return {
+    ...theme,
+    id: `custom-${Date.now()}`,
+    name: `${theme.name} Copy`,
+    author: "You",
+    source: "custom",
+    downloads: 0,
+    updated: new Date().toLocaleDateString("en-US")
+  };
+}
+
 function emitDashboardToast(kind: ToastKind, message: string) {
   window.dispatchEvent(
     new CustomEvent(DASHBOARD_TOAST_EVENT, {
@@ -1136,18 +1148,6 @@ export default function Dashboard() {
     }
   };
 
-  const duplicateTheme = (theme: ThemeDefinition) => {
-    void saveCustomTheme({
-      ...theme,
-      id: `custom-${Date.now()}`,
-      name: `${theme.name} Copy`,
-      author: "You",
-      source: "custom",
-      downloads: 0,
-      updated: new Date().toLocaleDateString("en-US")
-    });
-  };
-
   const installMarketplaceTheme = async (theme: ThemeDefinition) => {
     try {
       const response = await fetch(`/api/themes/${encodeURIComponent(theme.id)}/install`, {
@@ -1316,7 +1316,6 @@ export default function Dashboard() {
               themeError={themeError}
               onApplyTheme={setSelectedThemeId}
               onDeleteTheme={deleteCustomTheme}
-              onDuplicateTheme={duplicateTheme}
               onInstallTheme={installMarketplaceTheme}
               onSaveTheme={saveCustomTheme}
             />
@@ -1341,7 +1340,6 @@ function Themes({
   themeError,
   onApplyTheme,
   onDeleteTheme,
-  onDuplicateTheme,
   onInstallTheme,
   onSaveTheme
 }: {
@@ -1352,11 +1350,11 @@ function Themes({
   themeError: string;
   onApplyTheme: (themeId: string) => void;
   onDeleteTheme: (themeId: string) => Promise<void>;
-  onDuplicateTheme: (theme: ThemeDefinition) => void;
   onInstallTheme: (theme: ThemeDefinition) => Promise<void>;
   onSaveTheme: (theme: ThemeDefinition) => Promise<boolean>;
 }) {
   const [view, setView] = useState<"marketplace" | "create" | "mine">("marketplace");
+  const [editorBaseTheme, setEditorBaseTheme] = useState<ThemeDefinition>(activeTheme);
   const [query, setQuery] = useState("");
   const [sortMode, setSortMode] = useState<"latest" | "popular">("latest");
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -1386,6 +1384,17 @@ function Themes({
     setSelectedTags((tags) => (tags.includes(tag) ? tags.filter((item) => item !== tag) : [...tags, tag]));
   };
 
+  const openThemeCreator = () => {
+    setEditorBaseTheme(activeTheme);
+    setView("create");
+  };
+
+  const copyThemeToEditor = (theme: ThemeDefinition) => {
+    setEditorBaseTheme(copyThemeForEditor(theme));
+    setView("create");
+    emitDashboardToast("success", "Theme copied into the editor.");
+  };
+
   const handleSaveTheme = async (theme: ThemeDefinition) => {
     const saved = await onSaveTheme(theme);
     if (saved) setView("mine");
@@ -1407,7 +1416,7 @@ function Themes({
           <button className={`button ghost ${view === "mine" ? "active" : ""}`} onClick={() => setView("mine")}>
             My Themes
           </button>
-          <button className={`button primary ${view === "create" ? "active" : ""}`} onClick={() => setView("create")}>
+          <button className={`button primary ${view === "create" ? "active" : ""}`} onClick={openThemeCreator}>
             <Plus size={16} />
             Create Theme
           </button>
@@ -1457,14 +1466,22 @@ function Themes({
           <div className="theme-grid">
             {filteredMarketplaceThemes.map((theme) => {
               const installed = installedThemeIds.has(theme.id);
+              const selected = selectedThemeId === theme.id;
               return (
                 <ThemeCard
                   key={theme.id}
                   theme={theme}
-                  selected={selectedThemeId === theme.id}
+                  selected={selected}
                   primaryAction={installed ? "Apply" : "Install"}
-                  onApply={() => (installed ? onApplyTheme(theme.id) : void onInstallTheme(theme))}
-                  onDuplicate={() => onDuplicateTheme(theme)}
+                  onApply={() => {
+                    if (selected && theme.id !== DEFAULT_THEME_ID) {
+                      onApplyTheme(DEFAULT_THEME_ID);
+                      return;
+                    }
+                    if (installed) onApplyTheme(theme.id);
+                    else void onInstallTheme(theme);
+                  }}
+                  onDuplicate={() => copyThemeToEditor(theme)}
                 />
               );
             })}
@@ -1474,7 +1491,8 @@ function Themes({
 
       {view === "create" && (
         <ThemeCreator
-          baseTheme={activeTheme}
+          key={editorBaseTheme.id}
+          baseTheme={editorBaseTheme}
           onBack={() => setView("marketplace")}
           onImportTheme={handleSaveTheme}
           onSaveTheme={handleSaveTheme}
@@ -1486,9 +1504,9 @@ function Themes({
           customThemes={customThemes}
           selectedThemeId={selectedThemeId}
           onApplyTheme={onApplyTheme}
-          onCreateTheme={() => setView("create")}
+          onCreateTheme={openThemeCreator}
           onDeleteTheme={onDeleteTheme}
-          onDuplicateTheme={onDuplicateTheme}
+          onCopyTheme={copyThemeToEditor}
         />
       )}
     </section>
@@ -1510,7 +1528,9 @@ function ThemeCard({
   onDelete?: () => void;
   onDuplicate: () => void;
 }) {
-  const PrimaryIcon = selected ? Check : primaryAction === "Install" ? Download : Palette;
+  const isDefaultTheme = theme.id === DEFAULT_THEME_ID;
+  const PrimaryIcon = selected ? (isDefaultTheme ? Check : X) : primaryAction === "Install" ? Download : Palette;
+  const primaryLabel = selected ? (isDefaultTheme ? "Default" : "Use Default") : primaryAction;
 
   return (
     <article className={`theme-card ${selected ? "selected" : ""}`}>
@@ -1540,9 +1560,9 @@ function ThemeCard({
       <div className="theme-card-actions">
         <button className={`button ${selected ? "ghost" : "primary"}`} onClick={onApply}>
           <PrimaryIcon size={16} />
-          {selected ? "Applied" : primaryAction}
+          {primaryLabel}
         </button>
-        <button className="icon-button" title="Duplicate theme" aria-label={`Duplicate ${theme.name}`} onClick={onDuplicate}>
+        <button className="icon-button" title="Copy to editor" aria-label={`Copy ${theme.name} to editor`} onClick={onDuplicate}>
           <Copy size={16} />
         </button>
         <button className="icon-button" title="Export theme" aria-label={`Export ${theme.name}`} onClick={() => exportTheme(theme)}>
@@ -1817,14 +1837,14 @@ function MyThemes({
   onApplyTheme,
   onCreateTheme,
   onDeleteTheme,
-  onDuplicateTheme
+  onCopyTheme
 }: {
   customThemes: ThemeDefinition[];
   selectedThemeId: string;
   onApplyTheme: (themeId: string) => void;
   onCreateTheme: () => void;
   onDeleteTheme: (themeId: string) => Promise<void>;
-  onDuplicateTheme: (theme: ThemeDefinition) => void;
+  onCopyTheme: (theme: ThemeDefinition) => void;
 }) {
   if (!customThemes.length) {
     return (
@@ -1847,8 +1867,12 @@ function MyThemes({
           key={theme.id}
           theme={theme}
           selected={selectedThemeId === theme.id}
-          onApply={() => onApplyTheme(theme.id)}
-          onDuplicate={() => onDuplicateTheme(theme)}
+          onApply={() =>
+            selectedThemeId === theme.id && theme.id !== DEFAULT_THEME_ID
+              ? onApplyTheme(DEFAULT_THEME_ID)
+              : onApplyTheme(theme.id)
+          }
+          onDuplicate={() => onCopyTheme(theme)}
           onDelete={
             theme.id === DEFAULT_THEME_ID
               ? undefined
@@ -1904,6 +1928,7 @@ function Overview({ data }: { data: DashboardData }) {
             <h2>Channels</h2>
             <p>Retirement log: {fieldValue(data.readable_settings.retirement_log_channel)}</p>
             <p>Feedback channel: {fieldValue(data.readable_settings.staff_feedback_channel)}</p>
+            <p>Partnership log: {fieldValue(data.readable_settings.partnership_log_channel)}</p>
           </article>
         </div>
       </section>
@@ -1916,7 +1941,7 @@ function Moderation({ can }: { can: (key: string) => boolean }) {
     <Panel title="Moderation" index={["Warn", "Kick / Ban", "Timeouts", "Evidence Logging"]}>
       {can("moderation") && (
         <>
-          <div className="two-col">
+          <div className="two-col moderation-grid">
             {["warn", "kick", "ban", "unban"].map((action) => (
               <ActionForm action={action} key={action}>
                 <h2>{action[0].toUpperCase() + action.slice(1)} User</h2>
@@ -2603,6 +2628,10 @@ function BotSettings({ data }: { data: DashboardData }) {
           <label>
             Staff Feedback Channel
             <ChannelSelect name="staff_feedback_channel" channels={data.channels} selected={data.settings.staff_feedback_channel} />
+          </label>
+          <label>
+            Partnership Log Channel
+            <ChannelSelect name="partnership_log_channel" channels={data.channels} selected={data.settings.partnership_log_channel} />
           </label>
         </article>
 

@@ -444,7 +444,7 @@ def _settings_payload(settings):
         "retire_allowed_roles",
     ]:
         payload[key] = [str(role_id) for role_id in settings.get(key, [])]
-    for key in ["retirement_log_channel", "staff_feedback_channel"]:
+    for key in ["retirement_log_channel", "staff_feedback_channel", "partnership_log_channel"]:
         payload[key] = str(settings.get(key)) if settings.get(key) else ""
     payload["rank_roles"] = {
         rank: str(role_id) if role_id else ""
@@ -487,6 +487,7 @@ def _json_dashboard_context():
         "retire_allowed_roles": _selected_role_names(settings.get("retire_allowed_roles", []), role_lookup),
         "retirement_log_channel": _selected_channel_name(settings.get("retirement_log_channel"), channel_lookup),
         "staff_feedback_channel": _selected_channel_name(settings.get("staff_feedback_channel"), channel_lookup),
+        "partnership_log_channel": _selected_channel_name(settings.get("partnership_log_channel"), channel_lookup),
         "rank_roles": {
             rank: (role_lookup.get(int(role_id), f"Unknown role ({role_id})") if role_id else "")
             for rank, role_id in settings.get("rank_roles", {}).items()

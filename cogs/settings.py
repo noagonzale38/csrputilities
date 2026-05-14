@@ -94,6 +94,7 @@ DEFAULT_SETTINGS = {
     "feedback_enabled": False,
     "feedback_questions": ["Why did you decide to leave?"],
     "staff_feedback_channel": None,
+    "partnership_log_channel": None,
     "partnership_allowed_roles": [],
     "embed_allowed_roles": [],
     "retire_allowed_roles": [],
@@ -235,6 +236,7 @@ def dashboard_embed(guild: discord.Guild) -> discord.Embed:
     staff = ", ".join(f"<@&{r}>" for r in settings.get("staff_roles", [])) or "`Not set`"
     log_ch = f"<#{settings['retirement_log_channel']}>" if settings.get("retirement_log_channel") else "`Not set`"
     fb_ch = f"<#{settings['staff_feedback_channel']}>" if settings.get("staff_feedback_channel") else "`Not set`"
+    partner_log_ch = f"<#{settings['partnership_log_channel']}>" if settings.get("partnership_log_channel") else "`Not set`"
     fb_on = f"{CHECK} Enabled" if settings.get("feedback_enabled") else f"{CROSS} Disabled"
     questions = settings.get("feedback_questions", [])
     q_text = "\n".join(f"> `{i + 1}.` {q}" for i, q in enumerate(questions)) or "> None"
@@ -252,7 +254,8 @@ def dashboard_embed(guild: discord.Guild) -> discord.Embed:
     desc = (
         f"**Staff Roles:** {staff}\n"
         f"**Retirement Log Channel:** {log_ch}\n"
-        f"**Staff Feedback Channel:** {fb_ch}\n\n"
+        f"**Staff Feedback Channel:** {fb_ch}\n"
+        f"**Partnership Log Channel:** {partner_log_ch}\n\n"
         f"**Leave Feedback:** {fb_on}\n"
         f"**Questions:**\n{q_text}\n\n"
         f"**Partnership Permissions:** {partner}\n"
@@ -286,6 +289,7 @@ class DashboardView(discord.ui.View):
             discord.SelectOption(label="Staff Roles", value="staff_roles", description="Roles removed on retirement"),
             discord.SelectOption(label="Retirement Log Channel", value="retirement_log_channel", description="Where retirement/reinstatement logs go"),
             discord.SelectOption(label="Staff Feedback Channel", value="staff_feedback_channel", description="Where staff feedback is posted"),
+            discord.SelectOption(label="Partnership Log Channel", value="partnership_log_channel", description="Where partnership activity is logged"),
             discord.SelectOption(label="Leave Feedback Toggle", value="feedback_enabled", description="Toggle leave feedback DMs"),
             discord.SelectOption(label="Leave Feedback Questions", value="feedback_questions", description="Edit the leave feedback questions"),
             discord.SelectOption(label="Partnership Permissions", value="partnership_allowed_roles", description="Who can use /partnership"),
@@ -316,10 +320,11 @@ class DashboardView(discord.ui.View):
             brand_footer(embed)
             await interaction.response.edit_message(embed=embed, view=view)
 
-        elif choice in ("retirement_log_channel", "staff_feedback_channel"):
+        elif choice in ("retirement_log_channel", "staff_feedback_channel", "partnership_log_channel"):
             labels = {
                 "retirement_log_channel": "Retirement Log Channel",
                 "staff_feedback_channel": "Staff Feedback Channel",
+                "partnership_log_channel": "Partnership Log Channel",
             }
             view = ChannelConfigView(self.guild, self.author, choice, labels[choice])
             embed = discord.Embed(title=f"Configure: {labels[choice]}", description="Select the channel below.", color=BLANK_COLOR)
@@ -809,12 +814,13 @@ class Settings(commands.Cog):
                 "> `1.` **Staff Roles** — roles removed on retirement\n"
                 "> `2.` **Retirement Log Channel** — where retirement/reinstatement logs go\n"
                 "> `3.` **Staff Feedback Channel** — where staff feedback is posted\n"
-                "> `4.` **Leave Feedback** — toggle & questions for leave DMs\n"
-                "> `5.` **Partnership Permissions** — who can use /partnership\n"
-                "> `6.` **Embed Creation Permissions** — who can use /embed create\n"
-                "> `7.` **Retire/Reinstate Permissions** — who can use /retire & /reinstate\n"
-                "> `8.` **Rank Roles** — map rank names to Discord roles\n"
-                "> `9.` **Permission Checks** — replace hardcoded command access rules\n"
+                "> `4.` **Partnership Log Channel** - where partnership activity is logged\n"
+                "> `5.` **Leave Feedback** — toggle & questions for leave DMs\n"
+                "> `6.` **Partnership Permissions** — who can use /partnership\n"
+                "> `7.` **Embed Creation Permissions** — who can use /embed create\n"
+                "> `8.` **Retire/Reinstate Permissions** — who can use /retire & /reinstate\n"
+                "> `9.` **Rank Roles** — map rank names to Discord roles\n"
+                "> `10.` **Permission Checks** — replace hardcoded command access rules\n"
             ),
             color=BLANK_COLOR,
         )

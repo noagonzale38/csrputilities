@@ -2,10 +2,21 @@ import { ArrowRight, Shield } from "lucide-react";
 import { FaDiscord } from "react-icons/fa6";
 import Link from "next/link";
 
+const LOGIN_MEDIA_IMAGES = [
+  "https://csrptickets-storage.s3.us-east-1.amazonaws.com/CSRP_Staff_Team.webp",
+  "https://csrptickets-storage.s3.us-east-1.amazonaws.com/CSRP_Staff_Team.webp",
+  "https://csrptickets-storage.s3.us-east-1.amazonaws.com/CSRP_Staff_Team.webp"
+];
+
 export default function Home() {
   return (
     <main className="login-page">
       <section className="login-media">
+        <div className="login-media-slides" aria-hidden="true">
+          {LOGIN_MEDIA_IMAGES.map((src, index) => (
+            <div className="login-media-slide" style={{ backgroundImage: `url("${src}")` }} key={`${src}-${index}`} />
+          ))}
+        </div>
         <div className="login-overlay" />
         <div className="quote">
           <Shield size={28} />
