@@ -49,6 +49,8 @@ received_logs.txt
 report_blacklists.txt
 afk.json
 dashboard_permissions.json
+dashboard_evidence_logs.json
+dashboard_evidence_uploads/
 embed_messages.json
 guild_settings.json
 hits.json

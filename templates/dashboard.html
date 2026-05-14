@@ -150,6 +150,37 @@
           </form>
           {% endif %}
         </div>
+        <div class="two-col">
+          <form class="card form-grid accent" method="post" enctype="multipart/form-data" action="{{ url_for('dashboard_action', action='evidence_log') }}">
+            <h3>Evidence Logging</h3>
+            <input name="target_username" placeholder="Username" required>
+            <textarea name="description" placeholder="Ban description" required></textarea>
+            <input name="evidence_file" type="file" accept="image/*,video/*,.gif">
+            <input name="media_url" placeholder="Image, GIF, or video link">
+            <label class="checkbox-line"><input type="checkbox" name="sensitive"> Sensitive content</label>
+            <button class="button primary" type="submit">Save Evidence</button>
+          </form>
+          <form class="card form-grid" method="get" action="{{ url_for('dashboard') }}">
+            <h3>Lookup Evidence</h3>
+            <input name="evidence_user" placeholder="Username" value="{{ evidence_user }}">
+            <button class="button primary" type="submit">Search Evidence</button>
+          </form>
+        </div>
+        {% if evidence_results is not none %}
+        <article class="card">
+          <h3>Evidence for {{ evidence_user }}</h3>
+          <div class="list-grid">
+            {% for item in evidence_results %}
+            <div class="list-item">
+              <a href="{{ item.public_url }}" target="_blank" rel="noreferrer">{{ item.target_username }}</a>
+              <span>{{ item.description }}{% if item.sensitive %} | Sensitive{% endif %}</span>
+            </div>
+            {% else %}
+            <div class="list-item">No evidence found.</div>
+            {% endfor %}
+          </div>
+        </article>
+        {% endif %}
       </section>
       {% endif %}
 

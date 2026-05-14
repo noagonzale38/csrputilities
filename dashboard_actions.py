@@ -1,14 +1,18 @@
 import asyncio
 import json
 import re
+import secrets
 import subprocess
 import time
 import uuid
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlparse
 
 import discord
 from discord.ext import commands
+from werkzeug.utils import secure_filename
 
 from config import (
     INFRACTION_CHANNEL,
@@ -56,6 +60,12 @@ MAX_ERLC_CUSTOM_ACTION_STEPS = 10
 MAX_ERLC_CUSTOM_ACTION_WAIT_SECONDS = 60
 MAX_ERLC_CUSTOM_ACTION_TOTAL_WAIT_SECONDS = 300
 MAX_ERLC_CUSTOM_ACTIONS = 50
+EVIDENCE_LOGS_FILE = "dashboard_evidence_logs.json"
+EVIDENCE_UPLOAD_DIR = Path("dashboard_evidence_uploads")
+MAX_EVIDENCE_DESCRIPTION_LENGTH = 1500
+MAX_EVIDENCE_USERNAME_LENGTH = 100
+IMAGE_EVIDENCE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+VIDEO_EVIDENCE_EXTENSIONS = {".mp4", ".mov", ".webm", ".m4v"}
 
 
 class DashboardSentMessage:
@@ -196,6 +206,200 @@ def _load_lines(path: str) -> list[str]:
 def _save_lines(path: str, lines: list[str]) -> None:
     with open(path, "w") as file:
         file.write("\n".join(lines) + ("\n" if lines else ""))
+
+
+def _evidence_code() -> str:
+    return secrets.token_urlsafe(5).replace("-", "").replace("_", "")[:8]
+
+
+def _evidence_media_type(filename_or_url: str) -> str | None:
+    suffix = Path(urlparse(filename_or_url).path).suffix.lower()
+    if suffix in IMAGE_EVIDENCE_EXTENSIONS:
+        return "image"
+    if suffix in VIDEO_EVIDENCE_EXTENSIONS:
+        return "video"
+    return None
+
+
+def _safe_evidence_url(url: str) -> str:
+    cleaned_url = str(url or "").strip()
+    parsed = urlparse(cleaned_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError("Evidence links must be valid http or https URLs.")
+    if _evidence_media_type(cleaned_url) is None:
+        raise RuntimeError("Evidence links must point to an image, GIF, or video file.")
+    return cleaned_url
+
+
+def _sanitize_evidence_entry(entry: dict) -> dict | None:
+    if not isinstance(entry, dict):
+        return None
+
+    evidence_id = str(entry.get("id", "")).strip()
+    target_username = str(entry.get("target_username", "")).strip()
+    description = str(entry.get("description", "")).strip()
+    media_source = str(entry.get("media_source", "")).strip()
+    media_type = str(entry.get("media_type", "")).strip()
+
+    if not evidence_id or not target_username or not description:
+        return None
+    if media_source not in {"upload", "link"} or media_type not in {"image", "video"}:
+        return None
+    if media_source == "upload" and not str(entry.get("filename", "")).strip():
+        return None
+    if media_source == "link" and not str(entry.get("media_url", "")).strip():
+        return None
+
+    return {
+        "id": evidence_id,
+        "target_user_id": str(entry.get("target_user_id", "")).strip(),
+        "target_username": target_username[:MAX_EVIDENCE_USERNAME_LENGTH],
+        "target_lookup": str(entry.get("target_lookup", "")).strip() or _normalize_user_lookup(target_username),
+        "description": description[:MAX_EVIDENCE_DESCRIPTION_LENGTH],
+        "sensitive": bool(entry.get("sensitive")),
+        "media_source": media_source,
+        "media_type": media_type,
+        "media_url": str(entry.get("media_url", "")).strip(),
+        "filename": str(entry.get("filename", "")).strip(),
+        "created_by": str(entry.get("created_by", "")).strip(),
+        "created_at": int(entry.get("created_at", 0) or 0),
+    }
+
+
+def load_evidence_logs() -> list[dict]:
+    entries = _load_json_file(EVIDENCE_LOGS_FILE, [])
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in (_sanitize_evidence_entry(item) for item in entries) if entry]
+
+
+def _save_evidence_logs(entries: list[dict]) -> None:
+    with open(EVIDENCE_LOGS_FILE, "w") as file:
+        json.dump(entries, file, indent=4)
+
+
+def _public_evidence_payload(entry: dict, public_origin: str) -> dict:
+    media_url = entry["media_url"]
+    if entry["media_source"] == "upload":
+        media_url = f"/api/evidence-media/{quote(entry['id'])}/{quote(entry['filename'])}"
+
+    return {
+        "id": entry["id"],
+        "target_user_id": entry.get("target_user_id", ""),
+        "target_username": entry["target_username"],
+        "description": entry["description"],
+        "sensitive": bool(entry["sensitive"]),
+        "media_source": entry["media_source"],
+        "media_type": entry["media_type"],
+        "media_url": media_url,
+        "public_url": f"{public_origin.rstrip('/')}/evidence/{quote(entry['id'])}",
+        "created_at": int(entry.get("created_at", 0) or 0),
+        "created_by": entry.get("created_by", ""),
+    }
+
+
+def public_evidence_payload(entry: dict, public_origin: str) -> dict:
+    sanitized_entry = _sanitize_evidence_entry(entry)
+    if sanitized_entry is None:
+        raise RuntimeError("Evidence entry is invalid.")
+    return _public_evidence_payload(sanitized_entry, public_origin)
+
+
+def get_evidence_by_code(evidence_id: str) -> dict | None:
+    target_id = str(evidence_id or "").strip()
+    if not target_id:
+        return None
+    return next((entry for entry in load_evidence_logs() if entry["id"] == target_id), None)
+
+
+def get_evidence_for_user(username: str, resolved_user_id: int | None, public_origin: str) -> list[dict]:
+    normalized_lookup = _normalize_user_lookup(username)
+    raw_username = str(username or "").strip()
+    matches = []
+    for entry in load_evidence_logs():
+        user_id_matches = resolved_user_id is not None and entry.get("target_user_id") == str(resolved_user_id)
+        raw_id_matches = raw_username.isdigit() and entry.get("target_user_id") == raw_username
+        name_matches = normalized_lookup and entry.get("target_lookup") == normalized_lookup
+        if user_id_matches or raw_id_matches or name_matches:
+            matches.append(_public_evidence_payload(entry, public_origin))
+    return sorted(matches, key=lambda item: item["created_at"], reverse=True)
+
+
+def evidence_upload_directory(evidence_id: str) -> Path:
+    return EVIDENCE_UPLOAD_DIR / str(evidence_id)
+
+
+async def create_evidence_log(bot, actor_id: int, form_data: dict, uploaded_file, public_origin: str) -> dict:
+    target_username = str(form_data.get("target_username", "")).strip().lstrip("@")
+    description = str(form_data.get("description", "")).strip()
+    linked_media_url = str(form_data.get("media_url", "")).strip()
+    has_upload = bool(uploaded_file and getattr(uploaded_file, "filename", ""))
+    has_link = bool(linked_media_url)
+
+    if not target_username:
+        raise RuntimeError("Add the username this evidence belongs to.")
+    if not description:
+        raise RuntimeError("Add a description for the ban evidence.")
+    if has_upload == has_link:
+        raise RuntimeError("Upload one evidence file or add one evidence link.")
+
+    target_user_id = ""
+    stored_username = target_username[:MAX_EVIDENCE_USERNAME_LENGTH]
+    try:
+        resolved_user = await resolve_user(bot, target_username)
+        target_user_id = str(resolved_user.id)
+        stored_username = (
+            getattr(resolved_user, "display_name", None)
+            or getattr(resolved_user, "global_name", None)
+            or getattr(resolved_user, "name", target_username)
+        )[:MAX_EVIDENCE_USERNAME_LENGTH]
+    except RuntimeError:
+        pass
+
+    entries = load_evidence_logs()
+    evidence_id = _evidence_code()
+    while any(entry["id"] == evidence_id for entry in entries):
+        evidence_id = _evidence_code()
+
+    media_source = "link"
+    media_url = ""
+    filename = ""
+    media_type = ""
+
+    if has_upload:
+        original_filename = secure_filename(uploaded_file.filename or "")
+        if not original_filename:
+            raise RuntimeError("Uploaded evidence needs a valid file name.")
+        media_type = _evidence_media_type(original_filename) or ""
+        if media_type == "":
+            raise RuntimeError("Uploaded evidence must be an image, GIF, or video.")
+
+        upload_dir = evidence_upload_directory(evidence_id)
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"evidence{Path(original_filename).suffix.lower()}"
+        uploaded_file.save(upload_dir / filename)
+        media_source = "upload"
+    else:
+        media_url = _safe_evidence_url(linked_media_url)
+        media_type = _evidence_media_type(media_url) or ""
+
+    entry = {
+        "id": evidence_id,
+        "target_user_id": target_user_id,
+        "target_username": stored_username,
+        "target_lookup": _normalize_user_lookup(target_username),
+        "description": description[:MAX_EVIDENCE_DESCRIPTION_LENGTH],
+        "sensitive": form_data.get("sensitive") == "on",
+        "media_source": media_source,
+        "media_type": media_type,
+        "media_url": media_url,
+        "filename": filename,
+        "created_by": str(actor_id),
+        "created_at": int(time.time()),
+    }
+    entries.append(entry)
+    _save_evidence_logs(entries)
+    return _public_evidence_payload(entry, public_origin)
 
 
 def _parse_discord_user_id(identifier: Any) -> int | None:

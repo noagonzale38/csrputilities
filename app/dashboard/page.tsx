@@ -8,9 +8,13 @@ import {
   Copy,
   Database,
   Download,
+  ExternalLink,
+  FileImage,
   FileText,
+  FileVideo,
   Filter,
   Gauge,
+  Link as LinkIcon,
   LogOut,
   Megaphone,
   Palette,
@@ -128,6 +132,19 @@ type ErlcCustomAction = {
   created_by?: string;
   created_at?: number;
   updated_at?: number;
+};
+type EvidenceEntry = {
+  id: string;
+  target_user_id?: string;
+  target_username: string;
+  description: string;
+  sensitive: boolean;
+  media_source: "upload" | "link";
+  media_type: "image" | "video";
+  media_url: string;
+  public_url: string;
+  created_at: number;
+  created_by?: string;
 };
 type ErlcStepDraft = {
   id: number;
@@ -808,11 +825,13 @@ function ChannelSelect({ name, channels, selected }: { name: string; channels: C
 function DashboardPostForm({
   action,
   children,
-  className
+  className,
+  onSuccess
 }: {
   action: string;
   children: React.ReactNode;
   className: string;
+  onSuccess?: (payload: any, form: HTMLFormElement) => void;
 }) {
   const [submitting, setSubmitting] = useState(false);
 
@@ -845,7 +864,13 @@ function DashboardPostForm({
         throw new Error(payload?.error || payload?.message || "Action failed.");
       }
 
-      emitDashboardToast("success", ACTION_SUCCESS_MESSAGES[action] || payload?.message || "Action Completed Successfully.");
+      emitDashboardToast(
+        "success",
+        action === "evidence_log"
+          ? payload?.message || "Evidence Logged Successfully."
+          : ACTION_SUCCESS_MESSAGES[action] || payload?.message || "Action Completed Successfully."
+      );
+      onSuccess?.(payload, form);
       window.dispatchEvent(new Event(DASHBOARD_DATA_REFRESH_EVENT));
     } catch (err) {
       emitDashboardToast("error", err instanceof Error ? err.message : "Action failed.");
@@ -1855,22 +1880,180 @@ function Overview({ data }: { data: DashboardData }) {
 
 function Moderation({ can }: { can: (key: string) => boolean }) {
   return (
-    <Panel title="Moderation" index={["Warn", "Kick / Ban", "Timeouts"]}>
+    <Panel title="Moderation" index={["Warn", "Kick / Ban", "Timeouts", "Evidence Logging"]}>
       {can("moderation") && (
-        <div className="two-col">
-          {["warn", "kick", "ban", "unban"].map((action) => (
-            <ActionForm action={action} key={action}>
-              <h2>{action[0].toUpperCase() + action.slice(1)} User</h2>
-              <input name="target_id" placeholder="User ID or username" required />
-              <textarea name="reason" placeholder="Reason" required />
-              <button className="button primary">Submit</button>
-            </ActionForm>
-          ))}
-          <ActionForm action="mute"><h2>Apply Timeout</h2><input name="target_id" placeholder="User ID or username" required /><input name="duration" placeholder="10m / 2h / 1d" required /><textarea name="reason" placeholder="Reason" required /><button className="button primary">Apply Timeout</button></ActionForm>
-          <ActionForm action="unmute"><h2>Remove Timeout</h2><input name="target_id" placeholder="User ID or username" required /><textarea name="reason" placeholder="Reason" required /><button className="button primary">Remove Timeout</button></ActionForm>
-        </div>
+        <>
+          <div className="two-col">
+            {["warn", "kick", "ban", "unban"].map((action) => (
+              <ActionForm action={action} key={action}>
+                <h2>{action[0].toUpperCase() + action.slice(1)} User</h2>
+                <input name="target_id" placeholder="User ID or username" required />
+                <textarea name="reason" placeholder="Reason" required />
+                <button className="button primary">Submit</button>
+              </ActionForm>
+            ))}
+            <ActionForm action="mute"><h2>Apply Timeout</h2><input name="target_id" placeholder="User ID or username" required /><input name="duration" placeholder="10m / 2h / 1d" required /><textarea name="reason" placeholder="Reason" required /><button className="button primary">Apply Timeout</button></ActionForm>
+            <ActionForm action="unmute"><h2>Remove Timeout</h2><input name="target_id" placeholder="User ID or username" required /><textarea name="reason" placeholder="Reason" required /><button className="button primary">Remove Timeout</button></ActionForm>
+          </div>
+          <EvidenceLogging />
+        </>
       )}
     </Panel>
+  );
+}
+
+function formatEvidenceDate(timestamp: number) {
+  if (!timestamp) return "Unknown date";
+  return new Date(timestamp * 1000).toLocaleString([], {
+    dateStyle: "medium",
+    timeStyle: "short"
+  });
+}
+
+function EvidenceLogging() {
+  const [createdEvidence, setCreatedEvidence] = useState<EvidenceEntry | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<EvidenceEntry[] | null>(null);
+  const [searchError, setSearchError] = useState("");
+  const [searching, setSearching] = useState(false);
+
+  const copyEvidenceLink = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      emitDashboardToast("success", "Evidence link copied.");
+    } catch {
+      emitDashboardToast("error", "Unable to copy the evidence link.");
+    }
+  };
+
+  const searchEvidence = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const username = searchQuery.trim();
+    if (!username || searching) return;
+
+    setSearching(true);
+    setSearchError("");
+
+    try {
+      const response = await fetch(`/api/evidence?username=${encodeURIComponent(username)}`, {
+        credentials: "include",
+        headers: { Accept: "application/json" }
+      });
+      const payload = await response.json().catch(() => ({}));
+
+      if (response.redirected || response.status === 401) {
+        window.location.href = "/";
+        return;
+      }
+      if (!response.ok) throw new Error(payload?.error || "Unable to search evidence.");
+
+      setSearchResults(Array.isArray(payload.evidence) ? payload.evidence : []);
+    } catch (err) {
+      setSearchResults([]);
+      setSearchError(err instanceof Error ? err.message : "Unable to search evidence.");
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  return (
+    <section className="evidence-panel">
+      <div className="evidence-log-grid">
+        <DashboardPostForm
+          action="evidence_log"
+          className="setting-card form-grid evidence-log-card"
+          onSuccess={(payload, form) => {
+            if (payload?.evidence) setCreatedEvidence(payload.evidence as EvidenceEntry);
+            form.reset();
+          }}
+        >
+          <div className="panel-title-row">
+            <h2>Evidence Logging</h2>
+            <Upload size={18} />
+          </div>
+          <input name="target_username" placeholder="Username" required maxLength={100} />
+          <textarea name="description" placeholder="Ban description" required maxLength={1500} />
+          <label className="file-field">
+            <FileImage size={18} />
+            <span>Upload image, GIF, or video</span>
+            <input name="evidence_file" type="file" accept="image/*,video/*,.gif" />
+          </label>
+          <label className="input-with-icon">
+            <LinkIcon size={18} />
+            <input name="media_url" placeholder="Image, GIF, or video link" />
+          </label>
+          <label className="switch-line">
+            <input type="checkbox" name="sensitive" />
+            <span>Sensitive content</span>
+          </label>
+          <button className="button primary">Save Evidence</button>
+        </DashboardPostForm>
+
+        <form className="setting-card form-grid evidence-search-card" onSubmit={searchEvidence}>
+          <div className="panel-title-row">
+            <h2>Lookup Evidence</h2>
+            <Search size={18} />
+          </div>
+          <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Username" />
+          <button className="button primary" disabled={searching || !searchQuery.trim()}>
+            {searching ? <RefreshCw className="spin" size={16} /> : <Search size={16} />}
+            Search
+          </button>
+          {searchError && <div className="theme-alert">{searchError}</div>}
+          {searchResults === null ? (
+            <div className="evidence-empty">Search a username to view matching evidence.</div>
+          ) : (
+            <div className="evidence-results-list">
+              {searchResults.length ? (
+                searchResults.map((item) => (
+                  <article className="evidence-result-card" key={item.id}>
+                    <div className="evidence-result-main">
+                      <div className="evidence-result-title">
+                        {item.media_type === "video" ? <FileVideo size={17} /> : <FileImage size={17} />}
+                        <strong>{item.target_username}</strong>
+                        {item.sensitive && <span className="evidence-badge sensitive">Sensitive</span>}
+                      </div>
+                      <p>{item.description}</p>
+                      <span>{formatEvidenceDate(item.created_at)}</span>
+                    </div>
+                    <div className="evidence-link-actions">
+                      <button type="button" className="icon-button" aria-label={`Copy evidence ${item.id}`} onClick={() => copyEvidenceLink(item.public_url)}>
+                        <Copy size={16} />
+                      </button>
+                      <a className="icon-button" href={item.public_url} target="_blank" rel="noreferrer" aria-label={`Open evidence ${item.id}`}>
+                        <ExternalLink size={16} />
+                      </a>
+                    </div>
+                  </article>
+                ))
+              ) : (
+                <div className="evidence-empty">No evidence found for that username.</div>
+              )}
+            </div>
+          )}
+        </form>
+      </div>
+
+      {createdEvidence && (
+        <article className="setting-card evidence-created-card">
+          <div>
+            <h2>Evidence Saved</h2>
+            <p>{createdEvidence.target_username}</p>
+          </div>
+          <div className="copy-field">
+            <input readOnly value={createdEvidence.public_url} aria-label="Evidence short link" />
+            <button type="button" className="button ghost" onClick={() => copyEvidenceLink(createdEvidence.public_url)}>
+              <Copy size={16} />
+              Copy
+            </button>
+            <a className="button ghost" href={createdEvidence.public_url} target="_blank" rel="noreferrer">
+              <ExternalLink size={16} />
+              Open
+            </a>
+          </div>
+        </article>
+      )}
+    </section>
   );
 }
 

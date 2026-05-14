@@ -9,6 +9,7 @@ from pathlib import Path
 
 import requests
 from flask import (
+    abort,
     Flask,
     flash,
     has_request_context,
@@ -17,6 +18,7 @@ from flask import (
     render_template,
     request,
     session,
+    send_from_directory,
     url_for,
 )
 from flask_cors import CORS
@@ -29,13 +31,18 @@ from dashboard_actions import (
     clear_modlogs_for_user,
     collect_dashboard_stats,
     create_erlc_custom_action,
+    create_evidence_log,
     delete_erlc_custom_action,
+    evidence_upload_directory,
     fetch_erlc_players,
     fetch_erlc_server,
+    get_evidence_by_code,
+    get_evidence_for_user,
     get_actor_member,
     get_modlogs_for_user,
     get_target_guild,
     load_erlc_custom_actions,
+    public_evidence_payload,
     run_dashboard_ban_command,
     run_dashboard_command,
     run_dashboard_member_command,
@@ -352,6 +359,16 @@ def _dashboard_context():
         except Exception:
             modlog_results = []
 
+    evidence_user = request.args.get("evidence_user", "").strip()
+    evidence_results = None
+    if evidence_user and feature_access.get("moderation"):
+        resolved_evidence_user_id = None
+        try:
+            resolved_evidence_user_id = run_async(resolve_user_id(bot, evidence_user))
+        except Exception:
+            pass
+        evidence_results = get_evidence_for_user(evidence_user, resolved_evidence_user_id, _dashboard_public_origin())
+
     return {
         "member": member,
         "guild": guild,
@@ -368,6 +385,8 @@ def _dashboard_context():
         "erlc_custom_actions": erlc_custom_actions,
         "modlog_results": modlog_results,
         "modlog_user_id": modlog_user_id,
+        "evidence_results": evidence_results,
+        "evidence_user": evidence_user,
         "rank_order": RANK_ORDER,
         "permission_role_labels": PERMISSION_ROLE_LABELS,
         "permission_user_labels": PERMISSION_USER_LABELS,
@@ -499,6 +518,8 @@ def _json_dashboard_context():
         "erlc_custom_actions": context["erlc_custom_actions"],
         "modlog_results": context["modlog_results"],
         "modlog_user_id": context["modlog_user_id"],
+        "evidence_results": context["evidence_results"],
+        "evidence_user": context["evidence_user"],
         "rank_order": context["rank_order"],
         "permission_role_labels": context["permission_role_labels"],
         "permission_user_labels": context["permission_user_labels"],
@@ -588,7 +609,9 @@ def logout():
 @app.route("/dashboard")
 @login_required
 def dashboard():
-    return redirect(_dashboard_url("/dashboard"))
+    query_string = request.query_string.decode()
+    dashboard_path = f"/dashboard?{query_string}" if query_string else "/dashboard"
+    return redirect(_dashboard_url(dashboard_path))
 
 
 @app.route("/api/session")
@@ -641,6 +664,44 @@ def api_theme_install(theme_id):
     return jsonify({"theme": theme, "mine": list_user_themes(user_id)})
 
 
+@app.route("/api/evidence")
+@login_required
+def api_evidence_search():
+    member = current_member()
+    if not member_has_access([role.id for role in member.roles], "moderation"):
+        return jsonify({"error": "You do not have access to evidence logs."}), 403
+
+    username = request.args.get("username", "").strip()
+    if not username:
+        return jsonify({"evidence": []})
+
+    resolved_user_id = None
+    try:
+        resolved_user_id = run_async(resolve_user_id(get_bot(), username))
+    except Exception:
+        pass
+
+    return jsonify({
+        "evidence": get_evidence_for_user(username, resolved_user_id, _dashboard_public_origin()),
+    })
+
+
+@app.route("/api/evidence/<evidence_id>")
+def api_evidence_detail(evidence_id):
+    evidence = get_evidence_by_code(evidence_id)
+    if evidence is None:
+        return jsonify({"error": "Evidence was not found."}), 404
+    return jsonify({"evidence": public_evidence_payload(evidence, _dashboard_public_origin())})
+
+
+@app.route("/api/evidence-media/<evidence_id>/<path:filename>")
+def api_evidence_media(evidence_id, filename):
+    evidence = get_evidence_by_code(evidence_id)
+    if evidence is None or evidence.get("media_source") != "upload" or filename != evidence.get("filename"):
+        abort(404)
+    return send_from_directory(evidence_upload_directory(evidence_id), evidence["filename"])
+
+
 @app.route("/actions/<action>", methods=["POST"])
 @login_required
 def dashboard_action(action):
@@ -648,13 +709,14 @@ def dashboard_action(action):
     bot = get_bot()
     actor_id = member.id
 
-    def action_response(message=None, error=None, status=200):
+    def action_response(message=None, error=None, status=200, **extra):
         if _wants_json_response():
             payload = {"ok": error is None}
             if message is not None:
                 payload["message"] = message
             if error is not None:
                 payload["error"] = error
+            payload.update(extra)
             return jsonify(payload), status
 
         if error is not None:
@@ -688,6 +750,18 @@ def dashboard_action(action):
         "unban": ("moderation", lambda: run_async(run_dashboard_unban_command(bot, actor_id, request.form["target_id"], request.form["reason"]))),
         "mute": ("moderation", lambda: run_member_command("mute", {"time": request.form["duration"], "reason": request.form["reason"]})),
         "unmute": ("moderation", lambda: run_member_command("unmute", {"reason": request.form["reason"]})),
+        "evidence_log": (
+            "moderation",
+            lambda: run_async(
+                create_evidence_log(
+                    bot,
+                    actor_id,
+                    request.form,
+                    request.files.get("evidence_file"),
+                    _dashboard_public_origin(),
+                )
+            ),
+        ),
         "infract": (
             "infractions",
             lambda: run_member_command(
@@ -736,6 +810,8 @@ def dashboard_action(action):
         result = handler()
         if action == "docker_exec":
             return action_response(message=result[:500])
+        elif action == "evidence_log":
+            return action_response(message=f"Evidence logged: {result['public_url']}", evidence=result)
         else:
             return action_response(message=result)
     except Exception as exc:
