@@ -8,10 +8,17 @@ type EvidenceEntry = {
   target_username: string;
   description: string;
   sensitive: boolean;
+  media_items: EvidenceMediaItem[];
   media_type: "image" | "video";
   media_url: string;
   public_url: string;
   created_at: number;
+};
+type EvidenceMediaItem = {
+  media_source: "upload" | "link";
+  media_type: "image" | "video";
+  media_url: string;
+  filename?: string;
 };
 
 function formatEvidenceDate(timestamp: number) {
@@ -20,6 +27,12 @@ function formatEvidenceDate(timestamp: number) {
     dateStyle: "medium",
     timeStyle: "short"
   });
+}
+
+function evidenceMediaItems(entry: EvidenceEntry) {
+  return entry.media_items?.length
+    ? entry.media_items
+    : [{ media_source: "link" as const, media_type: entry.media_type, media_url: entry.media_url }];
 }
 
 export default function EvidenceViewer({ code }: { code: string }) {
@@ -75,6 +88,8 @@ export default function EvidenceViewer({ code }: { code: string }) {
   }
 
   const showSensitiveGate = evidence.sensitive && !acceptedSensitiveWarning;
+  const mediaItems = evidenceMediaItems(evidence);
+  const firstMediaItem = mediaItems[0];
 
   return (
     <main className="evidence-public-page">
@@ -89,12 +104,12 @@ export default function EvidenceViewer({ code }: { code: string }) {
           </div>
           <p>{evidence.description}</p>
           <div className="evidence-viewer-meta">
-            <span className="evidence-badge">{evidence.media_type === "video" ? <FileVideo size={14} /> : <FileImage size={14} />} {evidence.media_type}</span>
+            <span className="evidence-badge">{firstMediaItem.media_type === "video" ? <FileVideo size={14} /> : <FileImage size={14} />} {mediaItems.length} item{mediaItems.length === 1 ? "" : "s"}</span>
             <span className="evidence-badge">{formatEvidenceDate(evidence.created_at)}</span>
             {!showSensitiveGate && (
-              <a className="button ghost" href={evidence.media_url} target="_blank" rel="noreferrer">
+              <a className="button ghost" href={firstMediaItem.media_url} target="_blank" rel="noreferrer">
                 <ExternalLink size={16} />
-                Open Source
+                Open First Source
               </a>
             )}
           </div>
@@ -113,11 +128,15 @@ export default function EvidenceViewer({ code }: { code: string }) {
           </section>
         ) : (
           <section className="evidence-media-shell">
-            {evidence.media_type === "video" ? (
-              <video src={evidence.media_url} controls playsInline preload="metadata" />
-            ) : (
-              <img src={evidence.media_url} alt={`Evidence for ${evidence.target_username}`} />
-            )}
+            {mediaItems.map((item, index) => (
+              <div className="evidence-media-item" key={`${item.media_url}-${index}`}>
+                {item.media_type === "video" ? (
+                  <video src={item.media_url} controls playsInline preload="metadata" />
+                ) : (
+                  <img src={item.media_url} alt={`Evidence ${index + 1} for ${evidence.target_username}`} />
+                )}
+              </div>
+            ))}
           </section>
         )}
       </section>

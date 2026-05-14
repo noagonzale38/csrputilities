@@ -139,12 +139,27 @@ type EvidenceEntry = {
   target_username: string;
   description: string;
   sensitive: boolean;
+  media_items: EvidenceMediaItem[];
   media_source: "upload" | "link";
   media_type: "image" | "video";
   media_url: string;
   public_url: string;
   created_at: number;
   created_by?: string;
+};
+type EvidenceMediaItem = {
+  media_source: "upload" | "link";
+  media_type: "image" | "video";
+  media_url: string;
+  filename?: string;
+};
+type EvidenceDraftMedia = {
+  id: number;
+  source: "upload" | "link";
+  mediaType: "image" | "video";
+  url: string;
+  name: string;
+  file?: File;
 };
 type ErlcStepDraft = {
   id: number;
@@ -421,6 +436,9 @@ const MIN_RAIL_WIDTH = 236;
 const MAX_RAIL_WIDTH = 440;
 const MIN_WORKSPACE_WIDTH = 520;
 const RAIL_WIDTH_STORAGE_KEY = "csrp-dashboard-rail-width";
+const MAX_EVIDENCE_MEDIA_ITEMS = 3;
+const IMAGE_EVIDENCE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".gif", ".webp"];
+const VIDEO_EVIDENCE_EXTENSIONS = [".mp4", ".mov", ".webm", ".m4v"];
 
 function clampRailWidth(width: number) {
   const viewportMax =
@@ -665,6 +683,19 @@ function safeEmbedColor(value: string) {
   return /^#[0-9a-f]{6}$/i.test(value) ? value : "#5865f2";
 }
 
+function mediaTypeFromName(value: string): "image" | "video" | null {
+  const normalized = value.split("?")[0].split("#")[0].toLowerCase();
+  if (IMAGE_EVIDENCE_EXTENSIONS.some((extension) => normalized.endsWith(extension))) return "image";
+  if (VIDEO_EVIDENCE_EXTENSIONS.some((extension) => normalized.endsWith(extension))) return "video";
+  return null;
+}
+
+function evidenceMediaItems(entry: EvidenceEntry) {
+  return entry.media_items?.length
+    ? entry.media_items
+    : [{ media_source: entry.media_source, media_type: entry.media_type, media_url: entry.media_url }];
+}
+
 function previewLines(value: string) {
   return value.split("\n").map((line, index) => (
     <span key={index}>
@@ -826,12 +857,14 @@ function DashboardPostForm({
   action,
   children,
   className,
-  onSuccess
+  onSuccess,
+  buildFormData
 }: {
   action: string;
   children: React.ReactNode;
   className: string;
   onSuccess?: (payload: any, form: HTMLFormElement) => void;
+  buildFormData?: (form: HTMLFormElement) => FormData;
 }) {
   const [submitting, setSubmitting] = useState(false);
 
@@ -845,7 +878,7 @@ function DashboardPostForm({
     try {
       const response = await fetch(form.action, {
         method: "POST",
-        body: new FormData(form),
+        body: buildFormData ? buildFormData(form) : new FormData(form),
         credentials: "include",
         headers: {
           Accept: "application/json",
@@ -1916,6 +1949,22 @@ function EvidenceLogging() {
   const [searchResults, setSearchResults] = useState<EvidenceEntry[] | null>(null);
   const [searchError, setSearchError] = useState("");
   const [searching, setSearching] = useState(false);
+  const [mediaDraft, setMediaDraft] = useState<EvidenceDraftMedia[]>([]);
+  const [linkDraft, setLinkDraft] = useState("");
+  const mediaDraftRef = useRef<EvidenceDraftMedia[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    mediaDraftRef.current = mediaDraft;
+  }, [mediaDraft]);
+
+  useEffect(() => {
+    return () => {
+      mediaDraftRef.current.forEach((item) => {
+        if (item.source === "upload") URL.revokeObjectURL(item.url);
+      });
+    };
+  }, []);
 
   const copyEvidenceLink = async (url: string) => {
     try {
@@ -1924,6 +1973,102 @@ function EvidenceLogging() {
     } catch {
       emitDashboardToast("error", "Unable to copy the evidence link.");
     }
+  };
+
+  const clearMediaDraft = () => {
+    mediaDraft.forEach((item) => {
+      if (item.source === "upload") URL.revokeObjectURL(item.url);
+    });
+    setMediaDraft([]);
+    setLinkDraft("");
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const addFiles = (files: FileList | null) => {
+    if (!files?.length) return;
+    const remainingSlots = MAX_EVIDENCE_MEDIA_ITEMS - mediaDraft.length;
+    if (remainingSlots <= 0) {
+      emitDashboardToast("error", `You can attach up to ${MAX_EVIDENCE_MEDIA_ITEMS} evidence items.`);
+      return;
+    }
+
+    const nextItems: EvidenceDraftMedia[] = [];
+    Array.from(files).slice(0, remainingSlots).forEach((file) => {
+      const mediaType =
+        file.type.startsWith("video/")
+          ? "video"
+          : file.type.startsWith("image/")
+            ? "image"
+            : mediaTypeFromName(file.name);
+
+      if (!mediaType) {
+        emitDashboardToast("error", `${file.name} is not a supported image, GIF, or video.`);
+        return;
+      }
+
+      nextItems.push({
+        id: Date.now() + Math.random(),
+        source: "upload",
+        mediaType,
+        url: URL.createObjectURL(file),
+        name: file.name,
+        file
+      });
+    });
+
+    if (files.length > remainingSlots) {
+      emitDashboardToast("error", `Only ${remainingSlots} more evidence item${remainingSlots === 1 ? "" : "s"} can be added.`);
+    }
+    if (nextItems.length) setMediaDraft((current) => [...current, ...nextItems]);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const addLink = () => {
+    const url = linkDraft.trim();
+    if (!url) return;
+    if (mediaDraft.length >= MAX_EVIDENCE_MEDIA_ITEMS) {
+      emitDashboardToast("error", `You can attach up to ${MAX_EVIDENCE_MEDIA_ITEMS} evidence items.`);
+      return;
+    }
+
+    const mediaType = mediaTypeFromName(url);
+    if (!mediaType) {
+      emitDashboardToast("error", "Evidence links must end in a supported image, GIF, or video extension.");
+      return;
+    }
+
+    setMediaDraft((current) => [
+      ...current,
+      {
+        id: Date.now() + Math.random(),
+        source: "link",
+        mediaType,
+        url,
+        name: url
+      }
+    ]);
+    setLinkDraft("");
+  };
+
+  const removeMediaDraftItem = (id: number) => {
+    setMediaDraft((current) => {
+      const item = current.find((mediaItem) => mediaItem.id === id);
+      if (item?.source === "upload") URL.revokeObjectURL(item.url);
+      return current.filter((mediaItem) => mediaItem.id !== id);
+    });
+  };
+
+  const buildEvidenceFormData = (form: HTMLFormElement) => {
+    if (!mediaDraft.length) throw new Error("Add at least one evidence upload or link.");
+    const formData = new FormData(form);
+    mediaDraft.forEach((item) => {
+      if (item.file) {
+        formData.append("evidence_files", item.file, item.file.name);
+      } else {
+        formData.append("media_urls", item.url);
+      }
+    });
+    return formData;
   };
 
   const searchEvidence = async (event: FormEvent<HTMLFormElement>) => {
@@ -1962,9 +2107,11 @@ function EvidenceLogging() {
         <DashboardPostForm
           action="evidence_log"
           className="setting-card form-grid evidence-log-card"
+          buildFormData={buildEvidenceFormData}
           onSuccess={(payload, form) => {
             if (payload?.evidence) setCreatedEvidence(payload.evidence as EvidenceEntry);
             form.reset();
+            clearMediaDraft();
           }}
         >
           <div className="panel-title-row">
@@ -1975,18 +2122,52 @@ function EvidenceLogging() {
           <textarea name="description" placeholder="Ban description" required maxLength={1500} />
           <label className="file-field">
             <FileImage size={18} />
-            <span>Upload image, GIF, or video</span>
-            <input name="evidence_file" type="file" accept="image/*,video/*,.gif" />
+            <span>Upload up to {MAX_EVIDENCE_MEDIA_ITEMS} images, GIFs, or videos</span>
+            <input ref={fileInputRef} type="file" accept="image/*,video/*,.gif" multiple onChange={(event) => addFiles(event.target.files)} />
           </label>
-          <label className="input-with-icon">
-            <LinkIcon size={18} />
-            <input name="media_url" placeholder="Image, GIF, or video link" />
-          </label>
+          <div className="evidence-link-row">
+            <label className="input-with-icon">
+              <LinkIcon size={18} />
+              <input
+                value={linkDraft}
+                onChange={(event) => setLinkDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    addLink();
+                  }
+                }}
+                placeholder="Image, GIF, or video link"
+              />
+            </label>
+            <button type="button" className="button ghost" onClick={addLink} disabled={!linkDraft.trim() || mediaDraft.length >= MAX_EVIDENCE_MEDIA_ITEMS}>
+              <Plus size={16} />
+              Add
+            </button>
+          </div>
+          {mediaDraft.length > 0 && (
+            <div className="evidence-draft-grid">
+              {mediaDraft.map((item) => (
+                <article className="evidence-draft-card" key={item.id}>
+                  <div className="evidence-draft-preview">
+                    {item.mediaType === "video" ? <video src={item.url} muted playsInline /> : <img src={item.url} alt="" />}
+                  </div>
+                  <div>
+                    <strong>{item.source === "upload" ? item.name : "Linked evidence"}</strong>
+                    <span>{item.mediaType} | {item.source}</span>
+                  </div>
+                  <button type="button" className="icon-button danger" aria-label={`Remove ${item.name}`} onClick={() => removeMediaDraftItem(item.id)}>
+                    <X size={16} />
+                  </button>
+                </article>
+              ))}
+            </div>
+          )}
           <label className="switch-line">
             <input type="checkbox" name="sensitive" />
             <span>Sensitive content</span>
           </label>
-          <button className="button primary">Save Evidence</button>
+          <button className="button primary" disabled={!mediaDraft.length}>Save Evidence</button>
         </DashboardPostForm>
 
         <form className="setting-card form-grid evidence-search-card" onSubmit={searchEvidence}>
@@ -2005,27 +2186,32 @@ function EvidenceLogging() {
           ) : (
             <div className="evidence-results-list">
               {searchResults.length ? (
-                searchResults.map((item) => (
-                  <article className="evidence-result-card" key={item.id}>
-                    <div className="evidence-result-main">
-                      <div className="evidence-result-title">
-                        {item.media_type === "video" ? <FileVideo size={17} /> : <FileImage size={17} />}
-                        <strong>{item.target_username}</strong>
-                        {item.sensitive && <span className="evidence-badge sensitive">Sensitive</span>}
+                searchResults.map((item) => {
+                  const mediaItems = evidenceMediaItems(item);
+                  const firstMediaItem = mediaItems[0];
+                  return (
+                    <article className="evidence-result-card" key={item.id}>
+                      <div className="evidence-result-main">
+                        <div className="evidence-result-title">
+                          {firstMediaItem.media_type === "video" ? <FileVideo size={17} /> : <FileImage size={17} />}
+                          <strong>{item.target_username}</strong>
+                          <span className="evidence-badge">{mediaItems.length} item{mediaItems.length === 1 ? "" : "s"}</span>
+                          {item.sensitive && <span className="evidence-badge sensitive">Sensitive</span>}
+                        </div>
+                        <p>{item.description}</p>
+                        <span>{formatEvidenceDate(item.created_at)}</span>
                       </div>
-                      <p>{item.description}</p>
-                      <span>{formatEvidenceDate(item.created_at)}</span>
-                    </div>
-                    <div className="evidence-link-actions">
-                      <button type="button" className="icon-button" aria-label={`Copy evidence ${item.id}`} onClick={() => copyEvidenceLink(item.public_url)}>
-                        <Copy size={16} />
-                      </button>
-                      <a className="icon-button" href={item.public_url} target="_blank" rel="noreferrer" aria-label={`Open evidence ${item.id}`}>
-                        <ExternalLink size={16} />
-                      </a>
-                    </div>
-                  </article>
-                ))
+                      <div className="evidence-link-actions">
+                        <button type="button" className="icon-button" aria-label={`Copy evidence ${item.id}`} onClick={() => copyEvidenceLink(item.public_url)}>
+                          <Copy size={16} />
+                        </button>
+                        <a className="icon-button" href={item.public_url} target="_blank" rel="noreferrer" aria-label={`Open evidence ${item.id}`}>
+                          <ExternalLink size={16} />
+                        </a>
+                      </div>
+                    </article>
+                  );
+                })
               ) : (
                 <div className="evidence-empty">No evidence found for that username.</div>
               )}

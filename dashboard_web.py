@@ -697,9 +697,16 @@ def api_evidence_detail(evidence_id):
 @app.route("/api/evidence-media/<evidence_id>/<path:filename>")
 def api_evidence_media(evidence_id, filename):
     evidence = get_evidence_by_code(evidence_id)
-    if evidence is None or evidence.get("media_source") != "upload" or filename != evidence.get("filename"):
+    if evidence is None:
         abort(404)
-    return send_from_directory(evidence_upload_directory(evidence_id), evidence["filename"])
+    uploaded_filenames = {
+        item["filename"]
+        for item in evidence.get("media_items", [])
+        if item.get("media_source") == "upload"
+    }
+    if filename not in uploaded_filenames:
+        abort(404)
+    return send_from_directory(evidence_upload_directory(evidence_id), filename)
 
 
 @app.route("/actions/<action>", methods=["POST"])
@@ -757,7 +764,7 @@ def dashboard_action(action):
                     bot,
                     actor_id,
                     request.form,
-                    request.files.get("evidence_file"),
+                    request.files.getlist("evidence_files") or [request.files.get("evidence_file")],
                     _dashboard_public_origin(),
                 )
             ),

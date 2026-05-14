@@ -1052,6 +1052,65 @@ option {
   padding-left: 44px;
 }
 
+.evidence-link-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.evidence-draft-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.evidence-draft-card {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) 40px;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--field);
+}
+
+.evidence-draft-preview {
+  width: 72px;
+  height: 54px;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: #050606;
+}
+
+.evidence-draft-preview img,
+.evidence-draft-preview video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.evidence-draft-card strong,
+.evidence-draft-card span {
+  display: block;
+  min-width: 0;
+}
+
+.evidence-draft-card strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidence-draft-card span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: .82rem;
+  text-transform: capitalize;
+}
+
 .evidence-created-card {
   display: grid;
   gap: 14px;
@@ -1241,6 +1300,17 @@ option {
 .evidence-media-shell {
   overflow: hidden;
   padding: 14px;
+  background: #050606;
+}
+
+.evidence-media-shell {
+  display: grid;
+  gap: 14px;
+}
+
+.evidence-media-item {
+  overflow: hidden;
+  border-radius: 6px;
   background: #050606;
 }
 
@@ -2559,8 +2629,17 @@ option {
   }
 
   .copy-field,
-  .evidence-result-card {
+  .evidence-result-card,
+  .evidence-link-row {
     grid-template-columns: 1fr;
+  }
+
+  .evidence-draft-card {
+    grid-template-columns: 64px minmax(0, 1fr) 40px;
+  }
+
+  .evidence-draft-preview {
+    width: 64px;
   }
 
   .copy-field .button,

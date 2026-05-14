@@ -62,6 +62,7 @@ MAX_ERLC_CUSTOM_ACTION_TOTAL_WAIT_SECONDS = 300
 MAX_ERLC_CUSTOM_ACTIONS = 50
 EVIDENCE_LOGS_FILE = "dashboard_evidence_logs.json"
 EVIDENCE_UPLOAD_DIR = Path("dashboard_evidence_uploads")
+MAX_EVIDENCE_MEDIA_ITEMS = 3
 MAX_EVIDENCE_DESCRIPTION_LENGTH = 1500
 MAX_EVIDENCE_USERNAME_LENGTH = 100
 IMAGE_EVIDENCE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
@@ -231,6 +232,30 @@ def _safe_evidence_url(url: str) -> str:
     return cleaned_url
 
 
+def _sanitize_evidence_media_item(item: dict) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+
+    media_source = str(item.get("media_source", item.get("source", ""))).strip()
+    media_type = str(item.get("media_type", item.get("type", ""))).strip()
+    media_url = str(item.get("media_url", item.get("url", ""))).strip()
+    filename = str(item.get("filename", "")).strip()
+
+    if media_source not in {"upload", "link"} or media_type not in {"image", "video"}:
+        return None
+    if media_source == "upload" and not filename:
+        return None
+    if media_source == "link" and not media_url:
+        return None
+
+    return {
+        "media_source": media_source,
+        "media_type": media_type,
+        "media_url": media_url,
+        "filename": filename,
+    }
+
+
 def _sanitize_evidence_entry(entry: dict) -> dict | None:
     if not isinstance(entry, dict):
         return None
@@ -238,18 +263,23 @@ def _sanitize_evidence_entry(entry: dict) -> dict | None:
     evidence_id = str(entry.get("id", "")).strip()
     target_username = str(entry.get("target_username", "")).strip()
     description = str(entry.get("description", "")).strip()
-    media_source = str(entry.get("media_source", "")).strip()
-    media_type = str(entry.get("media_type", "")).strip()
+    raw_media_items = entry.get("media_items", [])
+    if not isinstance(raw_media_items, list):
+        raw_media_items = []
+    media_items = [
+        item
+        for item in (_sanitize_evidence_media_item(media_item) for media_item in raw_media_items)
+        if item
+    ]
+    if not media_items:
+        legacy_media_item = _sanitize_evidence_media_item(entry)
+        if legacy_media_item:
+            media_items = [legacy_media_item]
 
-    if not evidence_id or not target_username or not description:
-        return None
-    if media_source not in {"upload", "link"} or media_type not in {"image", "video"}:
-        return None
-    if media_source == "upload" and not str(entry.get("filename", "")).strip():
-        return None
-    if media_source == "link" and not str(entry.get("media_url", "")).strip():
+    if not evidence_id or not target_username or not description or not media_items:
         return None
 
+    first_media_item = media_items[0]
     return {
         "id": evidence_id,
         "target_user_id": str(entry.get("target_user_id", "")).strip(),
@@ -257,10 +287,11 @@ def _sanitize_evidence_entry(entry: dict) -> dict | None:
         "target_lookup": str(entry.get("target_lookup", "")).strip() or _normalize_user_lookup(target_username),
         "description": description[:MAX_EVIDENCE_DESCRIPTION_LENGTH],
         "sensitive": bool(entry.get("sensitive")),
-        "media_source": media_source,
-        "media_type": media_type,
-        "media_url": str(entry.get("media_url", "")).strip(),
-        "filename": str(entry.get("filename", "")).strip(),
+        "media_items": media_items[:MAX_EVIDENCE_MEDIA_ITEMS],
+        "media_source": first_media_item["media_source"],
+        "media_type": first_media_item["media_type"],
+        "media_url": first_media_item["media_url"],
+        "filename": first_media_item["filename"],
         "created_by": str(entry.get("created_by", "")).strip(),
         "created_at": int(entry.get("created_at", 0) or 0),
     }
@@ -279,9 +310,19 @@ def _save_evidence_logs(entries: list[dict]) -> None:
 
 
 def _public_evidence_payload(entry: dict, public_origin: str) -> dict:
-    media_url = entry["media_url"]
-    if entry["media_source"] == "upload":
-        media_url = f"/api/evidence-media/{quote(entry['id'])}/{quote(entry['filename'])}"
+    media_items = []
+    for media_item in entry["media_items"]:
+        media_url = media_item["media_url"]
+        if media_item["media_source"] == "upload":
+            media_url = f"/api/evidence-media/{quote(entry['id'])}/{quote(media_item['filename'])}"
+        media_items.append({
+            "media_source": media_item["media_source"],
+            "media_type": media_item["media_type"],
+            "media_url": media_url,
+            "filename": media_item["filename"],
+        })
+
+    first_media_item = media_items[0]
 
     return {
         "id": entry["id"],
@@ -289,9 +330,10 @@ def _public_evidence_payload(entry: dict, public_origin: str) -> dict:
         "target_username": entry["target_username"],
         "description": entry["description"],
         "sensitive": bool(entry["sensitive"]),
-        "media_source": entry["media_source"],
-        "media_type": entry["media_type"],
-        "media_url": media_url,
+        "media_items": media_items,
+        "media_source": first_media_item["media_source"],
+        "media_type": first_media_item["media_type"],
+        "media_url": first_media_item["media_url"],
         "public_url": f"{public_origin.rstrip('/')}/evidence/{quote(entry['id'])}",
         "created_at": int(entry.get("created_at", 0) or 0),
         "created_by": entry.get("created_by", ""),
@@ -329,19 +371,35 @@ def evidence_upload_directory(evidence_id: str) -> Path:
     return EVIDENCE_UPLOAD_DIR / str(evidence_id)
 
 
-async def create_evidence_log(bot, actor_id: int, form_data: dict, uploaded_file, public_origin: str) -> dict:
+def _form_media_urls(form_data: dict) -> list[str]:
+    media_urls = []
+    if hasattr(form_data, "getlist"):
+        media_urls.extend(str(url).strip() for url in form_data.getlist("media_urls"))
+    media_url = str(form_data.get("media_url", "")).strip()
+    if media_url:
+        media_urls.append(media_url)
+    return [url for url in media_urls if url]
+
+
+async def create_evidence_log(bot, actor_id: int, form_data: dict, uploaded_files, public_origin: str) -> dict:
     target_username = str(form_data.get("target_username", "")).strip().lstrip("@")
     description = str(form_data.get("description", "")).strip()
-    linked_media_url = str(form_data.get("media_url", "")).strip()
-    has_upload = bool(uploaded_file and getattr(uploaded_file, "filename", ""))
-    has_link = bool(linked_media_url)
+    uploaded_files = [
+        uploaded_file
+        for uploaded_file in (uploaded_files or [])
+        if uploaded_file and getattr(uploaded_file, "filename", "")
+    ]
+    linked_media_urls = _form_media_urls(form_data)
+    evidence_item_count = len(uploaded_files) + len(linked_media_urls)
 
     if not target_username:
         raise RuntimeError("Add the username this evidence belongs to.")
     if not description:
         raise RuntimeError("Add a description for the ban evidence.")
-    if has_upload == has_link:
-        raise RuntimeError("Upload one evidence file or add one evidence link.")
+    if evidence_item_count == 0:
+        raise RuntimeError("Add at least one evidence upload or link.")
+    if evidence_item_count > MAX_EVIDENCE_MEDIA_ITEMS:
+        raise RuntimeError(f"You can add up to {MAX_EVIDENCE_MEDIA_ITEMS} evidence uploads or links.")
 
     target_user_id = ""
     stored_username = target_username[:MAX_EVIDENCE_USERNAME_LENGTH]
@@ -361,12 +419,10 @@ async def create_evidence_log(bot, actor_id: int, form_data: dict, uploaded_file
     while any(entry["id"] == evidence_id for entry in entries):
         evidence_id = _evidence_code()
 
-    media_source = "link"
-    media_url = ""
-    filename = ""
-    media_type = ""
-
-    if has_upload:
+    validated_links = [_safe_evidence_url(linked_media_url) for linked_media_url in linked_media_urls]
+    upload_dir = evidence_upload_directory(evidence_id)
+    media_items = []
+    for index, uploaded_file in enumerate(uploaded_files, start=1):
         original_filename = secure_filename(uploaded_file.filename or "")
         if not original_filename:
             raise RuntimeError("Uploaded evidence needs a valid file name.")
@@ -374,14 +430,25 @@ async def create_evidence_log(bot, actor_id: int, form_data: dict, uploaded_file
         if media_type == "":
             raise RuntimeError("Uploaded evidence must be an image, GIF, or video.")
 
-        upload_dir = evidence_upload_directory(evidence_id)
         upload_dir.mkdir(parents=True, exist_ok=True)
-        filename = f"evidence{Path(original_filename).suffix.lower()}"
+        filename = f"evidence-{index}{Path(original_filename).suffix.lower()}"
         uploaded_file.save(upload_dir / filename)
-        media_source = "upload"
-    else:
-        media_url = _safe_evidence_url(linked_media_url)
-        media_type = _evidence_media_type(media_url) or ""
+        media_items.append({
+            "media_source": "upload",
+            "media_type": media_type,
+            "media_url": "",
+            "filename": filename,
+        })
+
+    for media_url in validated_links:
+        media_items.append({
+            "media_source": "link",
+            "media_type": _evidence_media_type(media_url) or "",
+            "media_url": media_url,
+            "filename": "",
+        })
+
+    first_media_item = media_items[0]
 
     entry = {
         "id": evidence_id,
@@ -390,10 +457,11 @@ async def create_evidence_log(bot, actor_id: int, form_data: dict, uploaded_file
         "target_lookup": _normalize_user_lookup(target_username),
         "description": description[:MAX_EVIDENCE_DESCRIPTION_LENGTH],
         "sensitive": form_data.get("sensitive") == "on",
-        "media_source": media_source,
-        "media_type": media_type,
-        "media_url": media_url,
-        "filename": filename,
+        "media_items": media_items,
+        "media_source": first_media_item["media_source"],
+        "media_type": first_media_item["media_type"],
+        "media_url": first_media_item["media_url"],
+        "filename": first_media_item["filename"],
         "created_by": str(actor_id),
         "created_at": int(time.time()),
     }

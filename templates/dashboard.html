@@ -155,8 +155,10 @@
             <h3>Evidence Logging</h3>
             <input name="target_username" placeholder="Username" required>
             <textarea name="description" placeholder="Ban description" required></textarea>
-            <input name="evidence_file" type="file" accept="image/*,video/*,.gif">
-            <input name="media_url" placeholder="Image, GIF, or video link">
+            <input name="evidence_files" type="file" accept="image/*,video/*,.gif" multiple>
+            <input name="media_urls" placeholder="Image, GIF, or video link">
+            <input name="media_urls" placeholder="Second evidence link">
+            <input name="media_urls" placeholder="Third evidence link">
             <label class="checkbox-line"><input type="checkbox" name="sensitive"> Sensitive content</label>
             <button class="button primary" type="submit">Save Evidence</button>
           </form>
