@@ -160,6 +160,22 @@
             <input name="media_urls" placeholder="Second evidence link">
             <input name="media_urls" placeholder="Third evidence link">
             <label class="checkbox-line"><input type="checkbox" name="sensitive"> Sensitive content</label>
+            <label>
+              Visibility
+              <select name="visibility">
+                <option value="all">All with link</option>
+                <option value="dashboard">Any dashboard user</option>
+                <option value="roles">Selected roles only</option>
+              </select>
+            </label>
+            <label>
+              Allowed roles
+              <select name="viewer_role_ids" multiple size="6">
+                {% for role in roles %}
+                <option value="{{ role.id }}">{{ role.name }}</option>
+                {% endfor %}
+              </select>
+            </label>
             <button class="button primary" type="submit">Save Evidence</button>
           </form>
           <form class="card form-grid" method="get" action="{{ url_for('dashboard') }}">
@@ -175,7 +191,7 @@
             {% for item in evidence_results %}
             <div class="list-item">
               <a href="{{ item.public_url }}" target="_blank" rel="noreferrer">{{ item.target_username }}</a>
-              <span>{{ item.description }}{% if item.sensitive %} | Sensitive{% endif %}</span>
+              <span>{{ item.description }}{% if item.sensitive %} | Sensitive{% endif %} | {{ item.visibility }}</span>
             </div>
             {% else %}
             <div class="list-item">No evidence found.</div>

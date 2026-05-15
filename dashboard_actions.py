@@ -279,6 +279,20 @@ def _sanitize_evidence_entry(entry: dict) -> dict | None:
     if not evidence_id or not target_username or not description or not media_items:
         return None
 
+    visibility = str(entry.get("visibility", entry.get("access", "all"))).strip().lower()
+    if visibility not in {"all", "dashboard", "roles"}:
+        visibility = "all"
+    raw_viewer_role_ids = entry.get("viewer_role_ids", entry.get("allowed_role_ids", []))
+    if not isinstance(raw_viewer_role_ids, list):
+        raw_viewer_role_ids = []
+    viewer_role_ids = sorted({
+        str(role_id).strip()
+        for role_id in raw_viewer_role_ids
+        if str(role_id).strip().isdigit()
+    })
+    if visibility == "roles" and not viewer_role_ids:
+        visibility = "dashboard"
+
     first_media_item = media_items[0]
     return {
         "id": evidence_id,
@@ -287,6 +301,8 @@ def _sanitize_evidence_entry(entry: dict) -> dict | None:
         "target_lookup": str(entry.get("target_lookup", "")).strip() or _normalize_user_lookup(target_username),
         "description": description[:MAX_EVIDENCE_DESCRIPTION_LENGTH],
         "sensitive": bool(entry.get("sensitive")),
+        "visibility": visibility,
+        "viewer_role_ids": viewer_role_ids,
         "media_items": media_items[:MAX_EVIDENCE_MEDIA_ITEMS],
         "media_source": first_media_item["media_source"],
         "media_type": first_media_item["media_type"],
@@ -330,6 +346,8 @@ def _public_evidence_payload(entry: dict, public_origin: str) -> dict:
         "target_username": entry["target_username"],
         "description": entry["description"],
         "sensitive": bool(entry["sensitive"]),
+        "visibility": entry.get("visibility", "all"),
+        "viewer_role_ids": [str(role_id) for role_id in entry.get("viewer_role_ids", [])],
         "media_items": media_items,
         "media_source": first_media_item["media_source"],
         "media_type": first_media_item["media_type"],
@@ -391,6 +409,17 @@ async def create_evidence_log(bot, actor_id: int, form_data: dict, uploaded_file
     ]
     linked_media_urls = _form_media_urls(form_data)
     evidence_item_count = len(uploaded_files) + len(linked_media_urls)
+    visibility = str(form_data.get("visibility", "all")).strip().lower()
+    if visibility not in {"all", "dashboard", "roles"}:
+        visibility = "all"
+    viewer_role_ids = []
+    if hasattr(form_data, "getlist"):
+        viewer_role_ids = [
+            str(role_id).strip()
+            for role_id in form_data.getlist("viewer_role_ids")
+            if str(role_id).strip().isdigit()
+        ]
+    viewer_role_ids = sorted(set(viewer_role_ids))
 
     if not target_username:
         raise RuntimeError("Add the username this evidence belongs to.")
@@ -400,6 +429,8 @@ async def create_evidence_log(bot, actor_id: int, form_data: dict, uploaded_file
         raise RuntimeError("Add at least one evidence upload or link.")
     if evidence_item_count > MAX_EVIDENCE_MEDIA_ITEMS:
         raise RuntimeError(f"You can add up to {MAX_EVIDENCE_MEDIA_ITEMS} evidence uploads or links.")
+    if visibility == "roles" and not viewer_role_ids:
+        raise RuntimeError("Choose at least one role when evidence visibility is set to selected roles.")
 
     target_user_id = ""
     stored_username = target_username[:MAX_EVIDENCE_USERNAME_LENGTH]
@@ -457,6 +488,8 @@ async def create_evidence_log(bot, actor_id: int, form_data: dict, uploaded_file
         "target_lookup": _normalize_user_lookup(target_username),
         "description": description[:MAX_EVIDENCE_DESCRIPTION_LENGTH],
         "sensitive": form_data.get("sensitive") == "on",
+        "visibility": visibility,
+        "viewer_role_ids": viewer_role_ids,
         "media_items": media_items,
         "media_source": first_media_item["media_source"],
         "media_type": first_media_item["media_type"],

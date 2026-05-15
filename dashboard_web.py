@@ -131,6 +131,36 @@ def _dashboard_access_denial_message(member):
     return None
 
 
+def _evidence_access_error(evidence):
+    visibility = str((evidence or {}).get("visibility", "all")).strip().lower()
+    if visibility == "all":
+        return None
+
+    if not session.get("discord_user_id"):
+        return "This evidence requires a dashboard login.", 401
+
+    member = current_member()
+    if member is None:
+        session.clear()
+        return "This evidence requires a dashboard login.", 401
+
+    access_denial = _dashboard_access_denial_message(member)
+    if access_denial:
+        return access_denial, 403
+
+    if visibility == "roles":
+        allowed_role_ids = {
+            int(role_id)
+            for role_id in evidence.get("viewer_role_ids", [])
+            if str(role_id).strip().isdigit()
+        }
+        member_role_ids = {role.id for role in member.roles}
+        if allowed_role_ids and not (member_role_ids & allowed_role_ids):
+            return "You do not have permission to view this evidence.", 403
+
+    return None
+
+
 def _env_value(name):
     value = os.getenv(name, "").strip()
     if value:
@@ -702,6 +732,10 @@ def api_evidence_detail(evidence_id):
     evidence = get_evidence_by_code(evidence_id)
     if evidence is None:
         return jsonify({"error": "Evidence was not found."}), 404
+    access_error = _evidence_access_error(evidence)
+    if access_error:
+        message, status = access_error
+        return jsonify({"error": message}), status
     return jsonify({"evidence": public_evidence_payload(evidence, _dashboard_public_origin())})
 
 
@@ -710,6 +744,9 @@ def api_evidence_media(evidence_id, filename):
     evidence = get_evidence_by_code(evidence_id)
     if evidence is None:
         abort(404)
+    access_error = _evidence_access_error(evidence)
+    if access_error:
+        abort(access_error[1])
     uploaded_filenames = {
         item["filename"]
         for item in evidence.get("media_items", [])

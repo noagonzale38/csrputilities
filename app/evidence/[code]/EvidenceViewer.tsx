@@ -8,6 +8,8 @@ type EvidenceEntry = {
   target_username: string;
   description: string;
   sensitive: boolean;
+  visibility: "all" | "dashboard" | "roles";
+  viewer_role_ids: string[];
   media_items: EvidenceMediaItem[];
   media_type: "image" | "video";
   media_url: string;
@@ -33,6 +35,12 @@ function evidenceMediaItems(entry: EvidenceEntry) {
   return entry.media_items?.length
     ? entry.media_items
     : [{ media_source: "link" as const, media_type: entry.media_type, media_url: entry.media_url }];
+}
+
+function evidenceVisibilityLabel(entry: EvidenceEntry) {
+  if (entry.visibility === "dashboard") return "Dashboard users";
+  if (entry.visibility === "roles") return "Restricted roles";
+  return "Anyone with link";
 }
 
 export default function EvidenceViewer({ code }: { code: string }) {
@@ -106,6 +114,7 @@ export default function EvidenceViewer({ code }: { code: string }) {
           <div className="evidence-viewer-meta">
             <span className="evidence-badge">{firstMediaItem.media_type === "video" ? <FileVideo size={14} /> : <FileImage size={14} />} {mediaItems.length} item{mediaItems.length === 1 ? "" : "s"}</span>
             <span className="evidence-badge">{formatEvidenceDate(evidence.created_at)}</span>
+            <span className="evidence-badge">{evidenceVisibilityLabel(evidence)}</span>
             {!showSensitiveGate && (
               <a className="button ghost" href={firstMediaItem.media_url} target="_blank" rel="noreferrer">
                 <ExternalLink size={16} />

@@ -141,6 +141,8 @@ type EvidenceEntry = {
   target_username: string;
   description: string;
   sensitive: boolean;
+  visibility: "all" | "dashboard" | "roles";
+  viewer_role_ids: string[];
   media_items: EvidenceMediaItem[];
   media_source: "upload" | "link";
   media_type: "image" | "video";
@@ -163,6 +165,7 @@ type EvidenceDraftMedia = {
   name: string;
   file?: File;
 };
+type EvidenceVisibility = "all" | "dashboard" | "roles";
 type ErlcStepDraft = {
   id: number;
   type: "command" | "wait";
@@ -738,7 +741,8 @@ function SelectionDropdown({
   multiple = false,
   placeholder,
   emptyLabel,
-  listLabel
+  listLabel,
+  onChange
 }: {
   name: string;
   options: DropdownOption[];
@@ -747,6 +751,7 @@ function SelectionDropdown({
   placeholder: string;
   emptyLabel?: string;
   listLabel: string;
+  onChange?: (values: string[]) => void;
 }) {
   const selectedKey = selectedValues(selected).join("|");
   const [values, setValues] = useState(() => selectedValues(selected));
@@ -778,12 +783,15 @@ function SelectionDropdown({
 
   const toggleValue = (value: string) => {
     setValues((current) => {
+      let nextValues: string[];
       if (!multiple) {
         setOpen(false);
-        return value ? [value] : [];
+        nextValues = value ? [value] : [];
+      } else {
+        nextValues = current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
       }
-
-      return current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
+      onChange?.(nextValues);
+      return nextValues;
     });
   };
 
@@ -841,7 +849,19 @@ function SelectionDropdown({
   );
 }
 
-function RoleSelect({ name, roles, selected, multiple = true }: { name: string; roles: Role[]; selected?: unknown; multiple?: boolean }) {
+function RoleSelect({
+  name,
+  roles,
+  selected,
+  multiple = true,
+  onChange
+}: {
+  name: string;
+  roles: Role[];
+  selected?: unknown;
+  multiple?: boolean;
+  onChange?: (values: string[]) => void;
+}) {
   return (
     <SelectionDropdown
       name={name}
@@ -851,6 +871,7 @@ function RoleSelect({ name, roles, selected, multiple = true }: { name: string; 
       placeholder={multiple ? "Select roles" : "No role selected"}
       emptyLabel="No role selected"
       listLabel="Roles"
+      onChange={onChange}
     />
   );
 }
@@ -1305,7 +1326,7 @@ export default function Dashboard() {
 
         <div className="content-grid">
           {active === "overview" && <Overview data={data} />}
-          {active === "moderation" && <Moderation can={can} />}
+          {active === "moderation" && <Moderation can={can} roles={data.roles} />}
           {active === "staff" && <Staff can={can} />}
           {active === "erlc" && <Erlc data={data} />}
           {active === "partnerships" && <Partnerships channels={data.channels} />}
@@ -1946,7 +1967,7 @@ function Overview({ data }: { data: DashboardData }) {
   );
 }
 
-function Moderation({ can }: { can: (key: string) => boolean }) {
+function Moderation({ can, roles }: { can: (key: string) => boolean; roles: Role[] }) {
   return (
     <Panel title="Moderation" index={["Warn", "Kick / Ban", "Timeouts", "Evidence Logging"]}>
       {can("moderation") && (
@@ -1963,7 +1984,7 @@ function Moderation({ can }: { can: (key: string) => boolean }) {
             <ActionForm action="mute"><h2>Apply Timeout</h2><input name="target_id" placeholder="User ID or username" required /><input name="duration" placeholder="10m / 2h / 1d" required /><textarea name="reason" placeholder="Reason" required /><button className="button primary">Apply Timeout</button></ActionForm>
             <ActionForm action="unmute"><h2>Remove Timeout</h2><input name="target_id" placeholder="User ID or username" required /><textarea name="reason" placeholder="Reason" required /><button className="button primary">Remove Timeout</button></ActionForm>
           </div>
-          <EvidenceLogging />
+          <EvidenceLogging roles={roles} />
         </>
       )}
     </Panel>
@@ -1978,7 +1999,14 @@ function formatEvidenceDate(timestamp: number) {
   });
 }
 
-function EvidenceLogging() {
+function evidenceVisibilityLabel(visibility: EvidenceVisibility, roles: Role[], viewerRoleIds: string[] = []) {
+  if (visibility === "all") return "Public link";
+  if (visibility === "dashboard") return "Dashboard access";
+  const labels = roleNames(viewerRoleIds, roles);
+  return labels.length ? labels.join(", ") : "Selected roles";
+}
+
+function EvidenceLogging({ roles }: { roles: Role[] }) {
   const [createdEvidence, setCreatedEvidence] = useState<EvidenceEntry | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<EvidenceEntry[] | null>(null);
@@ -1986,6 +2014,8 @@ function EvidenceLogging() {
   const [searching, setSearching] = useState(false);
   const [mediaDraft, setMediaDraft] = useState<EvidenceDraftMedia[]>([]);
   const [linkDraft, setLinkDraft] = useState("");
+  const [visibility, setVisibility] = useState<EvidenceVisibility>("all");
+  const [viewerRoleIds, setViewerRoleIds] = useState<string[]>([]);
   const mediaDraftRef = useRef<EvidenceDraftMedia[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -2018,6 +2048,10 @@ function EvidenceLogging() {
     setLinkDraft("");
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
+
+  useEffect(() => {
+    if (visibility !== "roles" && viewerRoleIds.length) setViewerRoleIds([]);
+  }, [viewerRoleIds, visibility]);
 
   const addFiles = (files: FileList | null) => {
     if (!files?.length) return;
@@ -2095,6 +2129,9 @@ function EvidenceLogging() {
 
   const buildEvidenceFormData = (form: HTMLFormElement) => {
     if (!mediaDraft.length) throw new Error("Add at least one evidence upload or link.");
+    if (visibility === "roles" && !viewerRoleIds.length) {
+      throw new Error("Choose at least one role when evidence visibility is set to selected roles.");
+    }
     const formData = new FormData(form);
     mediaDraft.forEach((item) => {
       if (item.file) {
@@ -2147,6 +2184,8 @@ function EvidenceLogging() {
             if (payload?.evidence) setCreatedEvidence(payload.evidence as EvidenceEntry);
             form.reset();
             clearMediaDraft();
+            setVisibility("all");
+            setViewerRoleIds([]);
           }}
         >
           <div className="panel-title-row">
@@ -2202,6 +2241,20 @@ function EvidenceLogging() {
             <input type="checkbox" name="sensitive" />
             <span>Sensitive content</span>
           </label>
+          <label>
+            Visibility
+            <select name="visibility" value={visibility} onChange={(event) => setVisibility(event.target.value as EvidenceVisibility)}>
+              <option value="all">All with link</option>
+              <option value="dashboard">Any dashboard user</option>
+              <option value="roles">Selected roles only</option>
+            </select>
+          </label>
+          {visibility === "roles" && (
+            <label>
+              Allowed roles
+              <RoleSelect name="viewer_role_ids" roles={roles} selected={viewerRoleIds} onChange={setViewerRoleIds} />
+            </label>
+          )}
           <button className="button primary" disabled={!mediaDraft.length}>Save Evidence</button>
         </DashboardPostForm>
 
@@ -2232,6 +2285,7 @@ function EvidenceLogging() {
                           <strong>{item.target_username}</strong>
                           <span className="evidence-badge">{mediaItems.length} item{mediaItems.length === 1 ? "" : "s"}</span>
                           {item.sensitive && <span className="evidence-badge sensitive">Sensitive</span>}
+                          <span className="evidence-badge">{evidenceVisibilityLabel(item.visibility || "all", roles, item.viewer_role_ids || [])}</span>
                         </div>
                         <p>{item.description}</p>
                         <span>{formatEvidenceDate(item.created_at)}</span>
@@ -2272,6 +2326,7 @@ function EvidenceLogging() {
               Open
             </a>
           </div>
+          <p>Visibility: {evidenceVisibilityLabel(createdEvidence.visibility || "all", roles, createdEvidence.viewer_role_ids || [])}</p>
         </article>
       )}
     </section>
