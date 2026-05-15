@@ -38,7 +38,7 @@ def save_afk(data):
 async def check_usernames():
     try:
         status, data = await api_get(
-            'https://api.policeroleplay.community/v1/server/players',
+            'https://api.erlc.gg/v1/server/players',
             headers={'Server-Key': SERVER_KEY},
         )
         if status != 200 or not isinstance(data, list):
@@ -66,7 +66,7 @@ async def check_usernames():
 async def ban_user(user_id, reason):
     try:
         await api_post(
-            "https://api.policeroleplay.community/v1/server/command",
+            "https://api.erlc.gg/v1/server/command",
             headers={"Content-Type": "application/json", "Server-Key": SERVER_KEY},
             json={"command": f":ban {user_id} {reason}"},
         )
@@ -667,7 +667,7 @@ class Events(commands.Cog):
 
         try:
             status, data = await api_get(
-                "https://api.policeroleplay.community/v1/server/players",
+                "https://api.erlc.gg/v1/server/players",
                 headers={"Server-Key": SERVER_KEY},
             )
             if status != 200 or not isinstance(data, list):
@@ -699,7 +699,7 @@ class Events(commands.Cog):
 
             try:
                 status, _ = await api_post(
-                    "https://api.policeroleplay.community/v1/server/command",
+                    "https://api.erlc.gg/v1/server/command",
                     headers={"Content-Type": "application/json", "Server-Key": SERVER_KEY},
                     json={"command": str(pm_command)},
                 )

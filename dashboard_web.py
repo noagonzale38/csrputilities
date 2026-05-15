@@ -24,7 +24,7 @@ from flask import (
 from flask_cors import CORS
 from dotenv import dotenv_values
 
-from cogs.settings import PERMISSION_ROLE_LABELS, PERMISSION_USER_LABELS, RANK_ORDER, get_guild_settings
+from cogs.settings import PERMISSION_ROLE_LABELS, PERMISSION_USER_LABELS, RANK_ORDER, get_guild_settings, member_has_permission
 from dashboard_actions import (
     blacklist_command_user,
     clear_all_modlogs,
@@ -337,6 +337,7 @@ def _dashboard_context():
     has_full_access = member_has_access([role.id for role in member.roles], None) and any(
         role.id in permissions.get("full_access_roles", []) for role in member.roles
     )
+    can_manage_themes = member_has_permission(member, role_keys=["bot_dev"])
 
     erlc_server = {}
     erlc_players = []
@@ -378,6 +379,7 @@ def _dashboard_context():
         "features": FEATURES,
         "feature_access": feature_access,
         "has_full_access": has_full_access,
+        "can_manage_themes": can_manage_themes,
         "roles": sorted(guild.roles, key=lambda role: role.position, reverse=True),
         "channels": sorted(guild.text_channels, key=lambda channel: channel.position),
         "erlc_server": erlc_server,
@@ -512,6 +514,7 @@ def _json_dashboard_context():
         "features": [{"key": key, "label": label} for key, label in context["features"]],
         "feature_access": context["feature_access"],
         "has_full_access": context["has_full_access"],
+        "can_manage_themes": context["can_manage_themes"],
         "roles": roles,
         "channels": channels,
         "erlc_server": context["erlc_server"],
@@ -635,6 +638,7 @@ def api_dashboard():
 def api_themes():
     member = current_member()
     user_id = str(member.id)
+    can_manage_themes = member_has_permission(member, role_keys=["bot_dev"])
 
     if request.method == "POST":
         payload = request.get_json(silent=True) or {}
@@ -645,24 +649,30 @@ def api_themes():
         return jsonify({"theme": theme}), 201
 
     return jsonify({
-        "marketplace": list_public_themes(),
-        "mine": list_user_themes(user_id),
+        "marketplace": list_public_themes(user_id, can_manage=can_manage_themes),
+        "mine": list_user_themes(user_id, can_manage=can_manage_themes),
     })
 
 
 @app.route("/api/themes/<theme_id>/install", methods=["POST", "DELETE"])
 @login_required
 def api_theme_install(theme_id):
-    user_id = str(current_member().id)
+    member = current_member()
+    user_id = str(member.id)
+    can_manage_themes = member_has_permission(member, role_keys=["bot_dev"])
 
     if request.method == "DELETE":
-        result = uninstall_theme(user_id, theme_id)
-        return jsonify({"removed": bool(result), "deleted": result == "deleted", "mine": list_user_themes(user_id)})
+        result = uninstall_theme(user_id, theme_id, can_manage=can_manage_themes)
+        return jsonify({
+            "removed": bool(result),
+            "deleted": result == "deleted",
+            "mine": list_user_themes(user_id, can_manage=can_manage_themes),
+        })
 
-    theme = install_theme(user_id, theme_id)
+    theme = install_theme(user_id, theme_id, can_manage=can_manage_themes)
     if theme is None:
         return jsonify({"error": "Theme not found."}), 404
-    return jsonify({"theme": theme, "mine": list_user_themes(user_id)})
+    return jsonify({"theme": theme, "mine": list_user_themes(user_id, can_manage=can_manage_themes)})
 
 
 @app.route("/api/evidence")

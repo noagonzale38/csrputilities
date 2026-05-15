@@ -52,7 +52,7 @@ from cogs.staffmgmt import (
     save_retirement,
 )
 
-PRC_API = "https://api.policeroleplay.community/v1"
+PRC_API = "https://api.erlc.gg/v1"
 PRC_HEADERS = {"Content-Type": "application/json", "Server-Key": SERVER_KEY}
 DEFAULT_GUILD_ID = REPORT_GUILD_ID
 ERLC_CUSTOM_ACTIONS_FILE = "dashboard_erlc_actions.json"

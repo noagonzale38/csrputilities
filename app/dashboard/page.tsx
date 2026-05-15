@@ -66,6 +66,7 @@ type ThemeDefinition = {
   updated: string;
   rating: number;
   source: "marketplace" | "custom";
+  canDelete?: boolean;
   colors: ThemeColors;
 };
 type ThemeDraft = Pick<ThemeDefinition, "name" | "description" | "tags" | "colors">;
@@ -82,6 +83,7 @@ type DashboardData = {
   permissions_data: { full_access_roles: string[]; features: Record<string, string[]> };
   features: Feature[];
   feature_access: Record<string, boolean>;
+  can_manage_themes: boolean;
   roles: Role[];
   channels: Channel[];
   erlc_server: Record<string, any>;
@@ -500,6 +502,7 @@ function normalizeThemeDefinition(value: unknown, fallbackSource: ThemeDefinitio
     updated: String(payload.updated || new Date().toLocaleDateString("en-US")),
     rating: Number.isFinite(payload.rating) ? Number(payload.rating) : 5,
     source: payload.source === "custom" || payload.source === "marketplace" ? payload.source : fallbackSource,
+    canDelete: Boolean((payload as { can_delete?: unknown }).can_delete ?? (payload as { canDelete?: unknown }).canDelete),
     colors: payload.colors
   };
 }
@@ -1482,6 +1485,13 @@ function Themes({
                     else void onInstallTheme(theme);
                   }}
                   onDuplicate={() => copyThemeToEditor(theme)}
+                  onDelete={
+                    theme.canDelete
+                      ? () => {
+                          if (window.confirm(`Delete ${theme.name}?`)) void onDeleteTheme(theme.id);
+                        }
+                      : undefined
+                  }
                 />
               );
             })}
@@ -1874,7 +1884,7 @@ function MyThemes({
           }
           onDuplicate={() => onCopyTheme(theme)}
           onDelete={
-            theme.id === DEFAULT_THEME_ID
+            theme.id === DEFAULT_THEME_ID || !theme.canDelete
               ? undefined
               : () => {
                   if (window.confirm(`Delete ${theme.name}?`)) void onDeleteTheme(theme.id);

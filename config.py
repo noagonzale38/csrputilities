@@ -105,7 +105,7 @@ afk_file = "afk.json"
 active_hits = "hits.json"
 testing_users_file = "testing_users.json"
 
-API_URL = "https://api.policeroleplay.community/v1"
+API_URL = "https://api.erlc.gg/v1"
 LOG_SERVER_URL = "https://internal-logs-utilities.officialcaliforniastateroleplay.com/v1/logs"
 LATENCY_API_URL = "https://internal-logs-utilities.officialcaliforniastateroleplay.com/v1/latency"
 

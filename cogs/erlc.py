@@ -12,7 +12,7 @@ from cogs.helpers import (
     api_get, api_post, PaginatorView,
 )
 
-PRC_API = "https://api.policeroleplay.community/v1"
+PRC_API = "https://api.erlc.gg/v1"
 PRC_HEADERS = {"Content-Type": "application/json", "Server-Key": SERVER_KEY}
 
 

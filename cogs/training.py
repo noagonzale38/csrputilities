@@ -243,7 +243,7 @@ class Training(commands.Cog):
         await ctx.defer()
         try:
             status, data = await api_get(
-                "https://api.policeroleplay.community/v1/server",
+                "https://api.erlc.gg/v1/server",
                 headers={"Server-Key": SERVER_KEY},
             )
             if status != 200 or not data:

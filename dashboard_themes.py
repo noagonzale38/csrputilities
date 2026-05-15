@@ -299,7 +299,16 @@ def init_theme_store():
         connection.commit()
 
 
-def _theme_payload(row: sqlite3.Row, source: str):
+def _can_delete_theme(row: sqlite3.Row, user_id: str | None = None, can_manage: bool = False) -> bool:
+    if row["id"] == "csrp-default":
+        return False
+    author_id = row["author_id"]
+    if author_id and user_id and author_id == user_id:
+        return True
+    return bool(can_manage and author_id)
+
+
+def _theme_payload(row: sqlite3.Row, source: str, user_id: str | None = None, can_manage: bool = False):
     return {
         "id": row["id"],
         "name": row["name"],
@@ -310,11 +319,12 @@ def _theme_payload(row: sqlite3.Row, source: str):
         "updated": _format_date(row["updated_at"]),
         "rating": float(row["rating"]),
         "source": source,
+        "can_delete": _can_delete_theme(row, user_id=user_id, can_manage=can_manage),
         "colors": json.loads(row["colors_json"]),
     }
 
 
-def list_public_themes():
+def list_public_themes(user_id: str | None = None, can_manage: bool = False):
     init_theme_store()
     with _connect() as connection:
         rows = connection.execute(
@@ -325,10 +335,10 @@ def list_public_themes():
             ORDER BY datetime(updated_at) DESC, name COLLATE NOCASE ASC
             """
         ).fetchall()
-    return [_theme_payload(row, "marketplace") for row in rows]
+    return [_theme_payload(row, "marketplace", user_id=user_id, can_manage=can_manage) for row in rows]
 
 
-def list_user_themes(user_id: str):
+def list_user_themes(user_id: str, can_manage: bool = False):
     init_theme_store()
     with _connect() as connection:
         rows = connection.execute(
@@ -345,7 +355,7 @@ def list_user_themes(user_id: str):
             """,
             (user_id, user_id, user_id),
         ).fetchall()
-    return [_theme_payload(row, "custom") for row in rows]
+    return [_theme_payload(row, "custom", user_id=user_id, can_manage=can_manage) for row in rows]
 
 
 def get_theme(theme_id: str):
@@ -354,7 +364,7 @@ def get_theme(theme_id: str):
         return connection.execute("SELECT * FROM themes WHERE id = ?", (theme_id,)).fetchone()
 
 
-def install_theme(user_id: str, theme_id: str):
+def install_theme(user_id: str, theme_id: str, can_manage: bool = False):
     init_theme_store()
     now = _utc_now()
     with _connect() as connection:
@@ -368,18 +378,18 @@ def install_theme(user_id: str, theme_id: str):
         _refresh_download_counts(connection, theme_id)
         connection.commit()
         theme = connection.execute("SELECT * FROM themes WHERE id = ?", (theme_id,)).fetchone()
-    return _theme_payload(theme, "custom")
+    return _theme_payload(theme, "custom", user_id=user_id, can_manage=can_manage)
 
 
-def uninstall_theme(user_id: str, theme_id: str):
+def uninstall_theme(user_id: str, theme_id: str, can_manage: bool = False):
     init_theme_store()
     if theme_id == "csrp-default":
         return False
     with _connect() as connection:
-        theme = connection.execute("SELECT author_id FROM themes WHERE id = ?", (theme_id,)).fetchone()
+        theme = connection.execute("SELECT id, author_id FROM themes WHERE id = ?", (theme_id,)).fetchone()
         if theme is None:
             return False
-        if theme["author_id"] == user_id:
+        if _can_delete_theme(theme, user_id=user_id, can_manage=can_manage):
             connection.execute("DELETE FROM theme_installs WHERE theme_id = ?", (theme_id,))
             connection.execute("DELETE FROM themes WHERE id = ?", (theme_id,))
             result = "deleted"

@@ -123,7 +123,7 @@ def _session_buttons():
 
 async def _get_player_count():
     try:
-        status, data = await api_get(f"https://api.policeroleplay.community/v1/server", headers={"Server-Key": SERVER_KEY})
+        status, data = await api_get(f"https://api.erlc.gg/v1/server", headers={"Server-Key": SERVER_KEY})
         if status == 200 and data:
             return data.get("CurrentPlayers", 0)
     except Exception:
@@ -133,7 +133,7 @@ async def _get_player_count():
 
 async def _get_staff_count():
     try:
-        status, data = await api_get(f"https://api.policeroleplay.community/v1/server/players", headers={"Server-Key": SERVER_KEY})
+        status, data = await api_get(f"https://api.erlc.gg/v1/server/players", headers={"Server-Key": SERVER_KEY})
         if status == 200 and isinstance(data, list):
             return sum(1 for p in data if isinstance(p, dict) and p.get("Permission") in ["Server Administrator", "Server Moderator"])
     except Exception:
@@ -143,7 +143,7 @@ async def _get_staff_count():
 
 async def _get_queue_count():
     try:
-        status, data = await api_get(f"https://api.policeroleplay.community/v1/server/queue", headers={"Server-Key": SERVER_KEY})
+        status, data = await api_get(f"https://api.erlc.gg/v1/server/queue", headers={"Server-Key": SERVER_KEY})
         if status == 200 and isinstance(data, list):
             return len(data)
     except Exception:
@@ -242,7 +242,7 @@ class Sessions(commands.Cog):
 
         try:
             status, data = await api_get(
-                "https://api.policeroleplay.community/v1/server/players",
+                "https://api.erlc.gg/v1/server/players",
                 headers={"Server-Key": SERVER_KEY},
             )
             if status != 200 or not isinstance(data, list):
