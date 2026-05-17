@@ -5,10 +5,12 @@ import json
 import time
 from typing import Optional
 
+from config import INFRACTION_CHANNEL
 from cogs.helpers import (
     BLANK_COLOR, CSRP_ICON,
     brand_footer, success_embed, error_embed, warning_embed, embed_description,
 )
+from cogs.moderation import build_infraction_embed
 from cogs.settings import get_guild_settings, has_setting_permission, RANK_ORDER
 
 RETIREMENTS_FILE = "retirements.json"
@@ -140,6 +142,21 @@ def _can_manage_rank(actor_rank: Optional[str], target_rank: Optional[str]) -> b
     if actor_rank is None or actor_rank not in RANK_ORDER:
         return False
     return RANK_ORDER.index(actor_rank) < RANK_ORDER.index(target_rank)
+
+
+def _rank_related_role_ids(settings: dict, rank: str) -> set[int]:
+    rank_roles = settings.get("rank_roles", {})
+    role_ids = set()
+    configured_role_id = rank_roles.get(rank)
+    if configured_role_id:
+        role_ids.add(int(configured_role_id))
+
+    base_role_id = BASE_ROLE_BY_RANK.get(rank)
+    if base_role_id:
+        role_ids.add(base_role_id)
+
+    role_ids.update(EXTRA_ROLE_IDS_BY_RANK.get(rank, []))
+    return role_ids
 
 
 class StaffManagement(commands.Cog):
@@ -330,6 +347,91 @@ class StaffManagement(commands.Cog):
                 f"{user.mention} has been reinstated as {demoted_role.mention} (**{demoted_rank}**), "
                 f"demoted from **{highest_rank}**. Roles restored: {', '.join(role.mention for role in roles_to_add)}."
             ),
+        ))
+
+    @commands.hybrid_command(name="demote", description="Demote a staff member by one rank.")
+    @app_commands.describe(user="The staff member to demote", reason="The reason for the demotion")
+    async def demote(self, ctx: commands.Context, user: discord.Member, *, reason: str):
+        settings = get_guild_settings(ctx.guild.id)
+
+        if not has_setting_permission(ctx.guild.id, "retire_allowed_roles", ctx.author):
+            await ctx.send(embed=error_embed("Not Permitted", "You do not have permission to use this command."))
+            return
+
+        infract_channel = self.bot.get_channel(INFRACTION_CHANNEL)
+        if infract_channel is None:
+            await ctx.send(embed=error_embed("Channel Not Found", "The infraction channel could not be found."))
+            return
+
+        actor_rank = _get_member_highest_rank(ctx.author, settings)
+        highest_rank = _get_member_highest_rank(user, settings)
+
+        if not highest_rank:
+            await ctx.send(embed=error_embed("Rank Not Found", f"{user.mention} does not have a configured staff rank."))
+            return
+
+        if not _can_manage_rank(actor_rank, highest_rank):
+            await ctx.send(embed=error_embed(
+                "Insufficient Rank",
+                f"You cannot demote {user.mention} because their rank (**{highest_rank}**) is higher than yours.",
+            ))
+            return
+
+        if highest_rank not in DEMOTION_MAP:
+            await ctx.send(embed=warning_embed(
+                "Cannot Demote",
+                f"{user.mention} is already at the lowest configured rank (**{highest_rank}**).",
+            ))
+            return
+
+        demoted_rank = DEMOTION_MAP[highest_rank]
+        current_role_ids = _rank_related_role_ids(settings, highest_rank)
+        target_role_ids = _rank_related_role_ids(settings, demoted_rank)
+
+        if not target_role_ids:
+            await ctx.send(embed=error_embed("Role Not Configured", f"No role mapping exists for **{demoted_rank}**."))
+            return
+
+        missing_role_ids = []
+        target_roles = []
+        for role_id in target_role_ids:
+            role = ctx.guild.get_role(role_id)
+            if role is None:
+                missing_role_ids.append(role_id)
+                continue
+            target_roles.append(role)
+
+        removable_role_ids = current_role_ids - target_role_ids
+        roles_to_remove = [role for role in user.roles if role.id in removable_role_ids]
+        roles_to_add = [role for role in target_roles if role not in user.roles]
+
+        if missing_role_ids:
+            missing_text = ", ".join(f"`{role_id}`" for role_id in missing_role_ids)
+            await ctx.send(embed=error_embed("Role Not Found", f"These demotion roles no longer exist in this server: {missing_text}"))
+            return
+
+        if not roles_to_remove and not roles_to_add:
+            await ctx.send(embed=warning_embed(
+                "No Role Changes",
+                f"{user.mention} already has the expected roles for **{demoted_rank}**.",
+            ))
+            return
+
+        try:
+            if roles_to_add:
+                await user.add_roles(*roles_to_add, reason=f"Demoted by {ctx.author.name}: {reason}")
+            if roles_to_remove:
+                await user.remove_roles(*roles_to_remove, reason=f"Demoted by {ctx.author.name}: {reason}")
+        except discord.Forbidden:
+            await ctx.send(embed=error_embed("Missing Permissions", "I don't have permission to update roles for this user."))
+            return
+
+        infraction_embed = build_infraction_embed(user, "Demote", reason, ctx.author)
+        await infract_channel.send(f"<@{user.id}>", embed=infraction_embed)
+
+        await ctx.send(embed=success_embed(
+            "Demotion Processed",
+            f"{user.mention} has been demoted from **{highest_rank}** to **{demoted_rank}**.",
         ))
 
     @commands.hybrid_command(name="staff_feedback", description="Leave feedback for a staff member.")

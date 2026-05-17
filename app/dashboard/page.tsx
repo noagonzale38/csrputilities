@@ -2679,7 +2679,7 @@ function BotSettings({ data }: { data: DashboardData }) {
             <RoleSelect name="embed_allowed_roles" roles={data.roles} selected={data.settings.embed_allowed_roles} />
           </label>
           <label>
-            Retire / Reinstate
+            Retire / Reinstate / Demote
             <RoleSelect name="retire_allowed_roles" roles={data.roles} selected={data.settings.retire_allowed_roles} />
           </label>
         </article>

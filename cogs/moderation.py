@@ -19,6 +19,9 @@ from cogs.helpers import (
 from cogs.settings import get_permission_role_ids
 
 
+INFRACTION_THUMBNAIL_URL = "https://media.discordapp.net/attachments/1155943381013368853/1170036267141054494/cachedImage.png?"
+
+
 def save_modlog(user_id, action, reason, moderator_id, case_id):
     timestamp = int(time.time())
     log_entry = {
@@ -83,6 +86,25 @@ def extract_ignore_restrictions_flag(text: str):
     cleaned_text = re.sub(r"\s*--ignore-restrictions\s*", " ", text).strip()
     cleaned_text = re.sub(r"\s{2,}", " ", cleaned_text)
     return cleaned_text, bypass_requested
+
+
+def build_infraction_embed(member: discord.Member, action: str, reason: str, signed_by: discord.Member) -> discord.Embed:
+    infraction_embed = discord.Embed(
+        color=discord.Color.blue(),
+        title="__CSRP Infraction__",
+        description=(
+            f"**━━━━━━━━━━━━━━━━━━━━━**\n\n"
+            f"**User:** {member.mention}\n\n"
+            f"**━━━━━━━━━━━━━━━━━━━━━**\n\n"
+            f"**Action:** {action}\n\n"
+            f"**━━━━━━━━━━━━━━━━━━━━━**\n \n"
+            f"**Reason:** {reason}\n\n"
+            f"**━━━━━━━━━━━━━━━━━━━━━**"
+        ),
+    )
+    infraction_embed.set_footer(text=f"Signed By: {signed_by}", icon_url=signed_by.display_avatar.url)
+    infraction_embed.set_thumbnail(url=INFRACTION_THUMBNAIL_URL)
+    return infraction_embed
 
 
 class Moderation(commands.Cog):
@@ -536,23 +558,7 @@ class Moderation(commands.Cog):
             "status": None,
         }
 
-        infraction_embed = discord.Embed(
-            color=discord.Color.blue(),
-            title="__CSRP Infraction__",
-            description=(
-                f"**━━━━━━━━━━━━━━━━━━━━━**\n\n"
-                f"**User:** {member.mention}\n\n"
-                f"**━━━━━━━━━━━━━━━━━━━━━**\n\n"
-                f"**Action:** {punishment}\n\n"
-                f"**━━━━━━━━━━━━━━━━━━━━━**\n \n"
-                f"**Reason:** {reason}\n\n"
-                f"**━━━━━━━━━━━━━━━━━━━━━**"
-            ),
-        )
-        infraction_embed.set_footer(text=f"Signed By: {ctx.author}", icon_url=ctx.author.display_avatar.url)
-        infraction_embed.set_thumbnail(
-            url="https://media.discordapp.net/attachments/1155943381013368853/1170036267141054494/cachedImage.png?"
-        )
+        infraction_embed = build_infraction_embed(member, punishment, reason, ctx.author)
         await infract_channel.send(f"<@{member.id}>", embed=infraction_embed)
 
         if ctx.message:

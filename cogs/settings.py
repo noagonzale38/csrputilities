@@ -260,7 +260,7 @@ def dashboard_embed(guild: discord.Guild) -> discord.Embed:
         f"**Questions:**\n{q_text}\n\n"
         f"**Partnership Permissions:** {partner}\n"
         f"**Embed Creation Permissions:** {embed_roles}\n"
-        f"**Retire/Reinstate Permissions:** {retire}\n\n"
+        f"**Retire/Reinstate/Demote Permissions:** {retire}\n\n"
         f"**Rank Roles:**\n{rank_text}\n\n"
         f"**Command Permission Checks:** Configure these from the Permission Checks menu."
     )
@@ -294,7 +294,7 @@ class DashboardView(discord.ui.View):
             discord.SelectOption(label="Leave Feedback Questions", value="feedback_questions", description="Edit the leave feedback questions"),
             discord.SelectOption(label="Partnership Permissions", value="partnership_allowed_roles", description="Who can use /partnership"),
             discord.SelectOption(label="Embed Creation Permissions", value="embed_allowed_roles", description="Who can use /embed create"),
-            discord.SelectOption(label="Retire/Reinstate Permissions", value="retire_allowed_roles", description="Who can use /retire & /reinstate"),
+            discord.SelectOption(label="Retire/Reinstate/Demote Permissions", value="retire_allowed_roles", description="Who can use /retire, /reinstate, and /demote"),
             discord.SelectOption(label="Rank Role Mapping", value="rank_roles", description="Map ranks to Discord roles"),
             discord.SelectOption(label="Permission Checks", value="permission_checks", description="Configure role/user-based command permissions"),
         ],
@@ -307,13 +307,13 @@ class DashboardView(discord.ui.View):
                 "staff_roles": "Staff Roles",
                 "partnership_allowed_roles": "Partnership Permissions",
                 "embed_allowed_roles": "Embed Creation Permissions",
-                "retire_allowed_roles": "Retire/Reinstate Permissions",
+                "retire_allowed_roles": "Retire/Reinstate/Demote Permissions",
             }
             descs = {
                 "staff_roles": "Select all roles considered **staff**. These are removed when a user is retired.",
                 "partnership_allowed_roles": "Select the roles allowed to use the **/partnership** command.",
                 "embed_allowed_roles": "Select the roles allowed to use the **/embed create** command.",
-                "retire_allowed_roles": "Select the roles allowed to use **/retire** and **/reinstate**.",
+                "retire_allowed_roles": "Select the roles allowed to use **/retire**, **/reinstate**, and **/demote**.",
             }
             view = RoleConfigView(self.guild, self.author, choice, labels[choice])
             embed = discord.Embed(title=f"Configure: {labels[choice]}", description=descs[choice], color=BLANK_COLOR)
@@ -818,7 +818,7 @@ class Settings(commands.Cog):
                 "> `5.` **Leave Feedback** — toggle & questions for leave DMs\n"
                 "> `6.` **Partnership Permissions** — who can use /partnership\n"
                 "> `7.` **Embed Creation Permissions** — who can use /embed create\n"
-                "> `8.` **Retire/Reinstate Permissions** — who can use /retire & /reinstate\n"
+                "> `8.` **Retire/Reinstate/Demote Permissions** — who can use /retire, /reinstate, and /demote\n"
                 "> `9.` **Rank Roles** — map rank names to Discord roles\n"
                 "> `10.` **Permission Checks** — replace hardcoded command access rules\n"
             ),

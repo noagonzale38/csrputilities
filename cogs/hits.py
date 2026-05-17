@@ -4,12 +4,36 @@ from discord import app_commands, ui
 import json
 from typing import Optional
 
-from config import active_hits, BLACKLIST_ROLE_ID
+from config import active_hits, BLACKLIST_ROLE_ID, CSRPUTILS_DEVS, DEV_ROLE_IDS
+from cogs.settings import get_guild_settings
 from cogs.helpers import (
     Colors, BLANK_COLOR, CHECK, CROSS, CSRP_ICON,
     success_embed, error_embed, info_embed, brand_footer, embed_description,
     PaginatorView,
 )
+
+
+MANAGEMENT_RANKS = ("Senior Management", "Management")
+MANAGEMENT_PLUS_ROLE_IDS = {1131166127964291172, 1157648329619021844}
+
+
+def can_clear_hits(member: discord.Member) -> bool:
+    if not getattr(member, "guild", None):
+        return False
+    if member.id in CSRPUTILS_DEVS:
+        return True
+
+    member_role_ids = {role.id for role in member.roles}
+    allowed_role_ids = set(DEV_ROLE_IDS) | MANAGEMENT_PLUS_ROLE_IDS
+
+    settings = get_guild_settings(member.guild.id)
+    rank_roles = settings.get("rank_roles", {})
+    for rank in MANAGEMENT_RANKS:
+        role_id = rank_roles.get(rank)
+        if role_id:
+            allowed_role_ids.add(int(role_id))
+
+    return bool(member_role_ids & allowed_role_ids)
 
 
 class DenyHitModal(discord.ui.Modal, title="Deny Hit"):
@@ -194,7 +218,8 @@ class Hits(commands.Cog):
                 description=(
                     "> `/hit place` — Place a bounty on someone\n"
                     "> `/hit active` — View all active hits\n"
-                    "> `/hit complete` — Mark a hit as completed"
+                    "> `/hit complete` — Mark a hit as completed\n"
+                    "> `/hit clear` — Clear all active hits"
                 ),
                 color=BLANK_COLOR,
             )
@@ -345,6 +370,40 @@ class Hits(commands.Cog):
             await user.send(embed=dm_embed)
         except Exception:
             pass
+
+    @hit.command(name="clear", description="Clear all active hits.")
+    async def clear(self, ctx):
+        if not can_clear_hits(ctx.author):
+            await ctx.send(embed=error_embed("Not Permitted", "Only MGMT+ and CSRP Developers can clear all hits."))
+            return
+
+        try:
+            with open(active_hits, "r") as file:
+                hits = json.load(file)
+        except (FileNotFoundError, json.JSONDecodeError):
+            hits = []
+
+        cleared_count = len(hits)
+        with open(active_hits, "w") as file:
+            json.dump([], file, indent=4)
+
+        await ctx.send(embed=success_embed("Hits Cleared", f"Cleared **{cleared_count}** active hit{'s' if cleared_count != 1 else ''}."))
+
+        log_channel = self.bot.get_channel(1361900183016706200)
+        if log_channel:
+            log_embed = discord.Embed(
+                title="Hits Cleared",
+                description=(
+                    f"> **Cleared By:** {ctx.author.mention}\n"
+                    f"> **Hits Cleared:** `{cleared_count}`"
+                ),
+                color=BLANK_COLOR,
+            )
+            log_embed.set_author(name="CSRP Utilities", icon_url=CSRP_ICON)
+            if ctx.author.display_avatar:
+                log_embed.set_thumbnail(url=ctx.author.display_avatar.url)
+            brand_footer(log_embed)
+            await log_channel.send(embed=log_embed)
 
 
 async def setup(bot):

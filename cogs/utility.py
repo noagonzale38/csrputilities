@@ -133,6 +133,7 @@ class Utility(commands.Cog):
             "fail": "Training",
             "pass": "Training",
             "training-result": "Training",
+            "demote": "Staff",
             "retire": "Staff",
             "reinstate": "Staff",
             "staff_feedback": "Staff",
