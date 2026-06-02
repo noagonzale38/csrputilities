@@ -1,56 +1,18 @@
-import discord
-from discord.ext import commands
-import sentry_sdk
 import asyncio
 import contextlib
-import os
-import json
 import logging
+import os
 import pty
 import re
 import shlex
 import signal
-import sys
 import time
-from typing import Optional
+from os import PathLike
 
-from config import (
-    TOKEN, SENTRY_DSN, LOG_FILE, afk_file, BASE_DIR,
-    IS_TESTING, BOT_OWNER_ID, is_testing_allowed,
-    load_testing_users, save_testing_users,
-)
-from cogs.helpers import install_components_v2_transport
-from lib.codex_runner import run_codex_prompt
+import discord
+from discord.ext import commands
 
-TARGET_GUILD_ID = 965829463512330260
-
-sentry_sdk.init(
-    dsn=SENTRY_DSN,
-    traces_sample_rate=1.0,
-    environment="production",
-    release="csrputils@2.0.0",
-)
-
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler(),
-    ],
-)
-
-if not os.path.exists(afk_file):
-    with open(afk_file, "w") as f:
-        json.dump({}, f)
-
-intents = discord.Intents.all()
-
-install_components_v2_transport()
-bot = commands.Bot(command_prefix="-", help_command=None, intents=intents)
-console_task = None
 active_console_sessions: dict[int, "JskConsoleView"] = {}
-JSK_RESTART_ALLOWED_USER_ID = 654110914311618561
 
 TERMINAL_OUTPUT_LIMIT = 3200
 TERMINAL_EMBED_LIMIT = 1800
@@ -84,12 +46,6 @@ def _tail_text(value: str, limit: int) -> str:
     if len(value) <= limit:
         return value
     return "...\n" + value[-limit:]
-
-
-async def _can_use_jsk_restart(ctx: commands.Context) -> bool:
-    if await bot.is_owner(ctx.author):
-        return True
-    return ctx.author.id == JSK_RESTART_ALLOWED_USER_ID
 
 
 class TerminalCommandModal(discord.ui.Modal, title="Run Terminal Command"):
@@ -126,7 +82,7 @@ class TerminalKeysModal(discord.ui.Modal, title="Send Raw Input"):
 
 
 class JskConsoleView(discord.ui.View):
-    def __init__(self, author: discord.abc.User):
+    def __init__(self, author: discord.abc.User, base_dir: str):
         super().__init__(timeout=3600)
         self.author_id = author.id
         self.author_mention = author.mention
@@ -136,7 +92,7 @@ class JskConsoleView(discord.ui.View):
         self.reader_task: asyncio.Task | None = None
         self.refresh_task: asyncio.Task | None = None
         self.output_buffer = ""
-        self.base_dir = str(BASE_DIR)
+        self.base_dir = base_dir
         self.cwd = self.base_dir
         self.last_input = "(none)"
         self.created_at = int(time.time())
@@ -197,7 +153,10 @@ class JskConsoleView(discord.ui.View):
         running = not self.closed and self.exit_code is None
         color = discord.Color.green() if running else discord.Color.red()
         status = "Running" if running else ("Closed" if self.exit_code is None else f"Exited ({self.exit_code})")
-        output = _tail_text(self.output_buffer.strip() or "Terminal started. Waiting for output...", TERMINAL_EMBED_LIMIT)
+        output = _tail_text(
+            self.output_buffer.strip() or "Terminal started. Waiting for output...",
+            TERMINAL_EMBED_LIMIT,
+        )
         embed = discord.Embed(
             title="Jishaku Console",
             description=f"```ansi\n{output}\n```",
@@ -396,327 +355,45 @@ class JskConsoleView(discord.ui.View):
         await interaction.response.defer()
         await self.close(reason="Console closed by operator.")
 
-if IS_TESTING:
-    @bot.check
-    async def testing_mode_check(ctx):
-        if is_testing_allowed(ctx.author.id):
-            return True
-        raise commands.CheckFailure("Bot is in testing mode. You are not authorized to use commands.")
 
-    @bot.group(name="testing", invoke_without_command=True)
-    async def testing_group(ctx):
-        if ctx.author.id != BOT_OWNER_ID:
-            return
-        testers = load_testing_users()
-        if not testers:
-            await ctx.send("**Testing Mode** | No testers added yet.")
-            return
-        user_list = ", ".join(f"<@{uid}>" for uid in testers)
-        await ctx.send(f"**Testing Mode** | Authorized testers: {user_list}")
-
-    @testing_group.command(name="add")
-    async def testing_add(ctx, user: discord.Member):
-        if ctx.author.id != BOT_OWNER_ID:
-            return
-        testers = load_testing_users()
-        testers.add(user.id)
-        save_testing_users(testers)
-        await ctx.send(f"**Testing Mode** | Added **{user.display_name}** to the testers list.")
-
-    @testing_group.command(name="remove")
-    async def testing_remove(ctx, user: discord.Member):
-        if ctx.author.id != BOT_OWNER_ID:
-            return
-        testers = load_testing_users()
-        testers.discard(user.id)
-        save_testing_users(testers)
-        await ctx.send(f"**Testing Mode** | Removed **{user.display_name}** from the testers list.")
-
-    logging.info("Testing mode is ENABLED — commands restricted to owner and approved testers.")
-
-
-COGS = [
-    "cogs.moderation",
-    "cogs.erlc",
-    "cogs.sessions",
-    "cogs.training",
-    "cogs.fun",
-    "cogs.music",
-    "cogs.utility",
-    "cogs.embed_creator",
-    "cogs.admin",
-    "cogs.hits",
-    "cogs.events",
-    "cogs.settings",
-    "cogs.staffmgmt",
-]
-
-
-async def load_cogs():
-    for cog in COGS:
-        try:
-            await bot.load_extension(cog)
-            logging.info(f"Loaded {cog}")
-        except Exception as e:
-            logging.error(f"Failed to load {cog}: {e}")
-
-
-def _clean_mention(raw_value: str) -> str:
-    return raw_value.strip().strip("<@!@&>#")
-
-
-async def _get_target_guild() -> Optional[discord.Guild]:
-    guild = bot.get_guild(TARGET_GUILD_ID)
-    if guild is None:
-        try:
-            guild = await bot.fetch_guild(TARGET_GUILD_ID)
-        except discord.HTTPException:
-            return None
-    return guild
-
-
-async def _resolve_member(guild: discord.Guild, raw_value: str) -> Optional[discord.Member]:
-    cleaned = _clean_mention(raw_value)
-    if cleaned.isdigit():
-        member = guild.get_member(int(cleaned))
-        if member is not None:
-            return member
-        try:
-            return await guild.fetch_member(int(cleaned))
-        except discord.HTTPException:
-            return None
-
-    lowered = raw_value.lower()
-    for member in guild.members:
-        if member.name.lower() == lowered or member.display_name.lower() == lowered:
-            return member
-    return None
-
-
-def _resolve_role(guild: discord.Guild, raw_value: str) -> Optional[discord.Role]:
-    cleaned = _clean_mention(raw_value)
-    if cleaned.isdigit():
-        return guild.get_role(int(cleaned))
-
-    lowered = raw_value.lower()
-    for role in guild.roles:
-        if role.name.lower() == lowered:
-            return role
-    return None
-
-
-async def _resolve_channel(raw_value: str):
-    cleaned = _clean_mention(raw_value)
-    if not cleaned.isdigit():
-        return None
-
-    channel_id = int(cleaned)
-    channel = bot.get_channel(channel_id)
-    if channel is not None:
-        return channel
-
-    try:
-        return await bot.fetch_channel(channel_id)
-    except discord.HTTPException:
-        return None
-
-
-async def handle_console_command(command_line: str):
-    try:
-        parts = shlex.split(command_line)
-    except ValueError as exc:
-        logging.error(f"Invalid console command syntax: {exc}")
-        return
-
-    if not parts:
-        return
-
-    command_name = parts[0].lower().lstrip("/")
-
-    if command_name == "restart":
-        logging.info("Console command received: restart")
-        await bot.close()
-        os.execv(sys.executable, [sys.executable] + sys.argv)
-
-    if command_name == "codex":
-        if len(parts) < 2:
-            logging.error("Usage: /codex {prompt}")
-            return
-
-        prompt = " ".join(parts[1:])
-        logging.info(f"Running Codex in {BASE_DIR} with prompt: {prompt}")
-        try:
-            return_code, stdout, stderr = await run_codex_prompt(prompt)
-        except OSError as exc:
-            logging.error("Unable to launch Codex: %s", exc)
-            return
-        if stdout.strip():
-            logging.info("Codex stdout:\n%s", stdout.strip())
-        if stderr.strip():
-            logging.warning("Codex stderr:\n%s", stderr.strip())
-        logging.info("Codex exited with code %s", return_code)
-        return
-
-    guild = await _get_target_guild()
-    if guild is None:
-        logging.error(f"Unable to resolve guild {TARGET_GUILD_ID} for console command execution.")
-        return
-
-    if command_name == "say":
-        if len(parts) < 3:
-            logging.error("Usage: say {channel_id} {message}")
-            return
-
-        channel = await _resolve_channel(parts[1])
-        if channel is None:
-            logging.error(f"Channel not found: {parts[1]}")
-            return
-        if getattr(channel, "guild", None) is None or channel.guild.id != TARGET_GUILD_ID:
-            logging.error(f"Channel {parts[1]} is not in guild {TARGET_GUILD_ID}")
-            return
-
-        message = " ".join(parts[2:])
-        await channel.send(message)
-        logging.info(f"Sent console message to channel {getattr(channel, 'id', parts[1])}")
-        return
-
-    if command_name in {"addrole", "removerole"}:
-        if len(parts) < 3:
-            logging.error(f"Usage: {command_name} {{user}} {{roleName}}")
-            return
-
-        member = await _resolve_member(guild, parts[1])
-        if member is None:
-            logging.error(f"Member not found: {parts[1]}")
-            return
-
-        role_name = " ".join(parts[2:])
-        role = _resolve_role(guild, role_name)
-        if role is None:
-            logging.error(f"Role not found: {role_name}")
-            return
-
-        if command_name == "addrole":
-            await member.add_roles(role, reason="Console command")
-            logging.info(f"Added role '{role.name}' to {member} via console command")
-        else:
-            await member.remove_roles(role, reason="Console command")
-            logging.info(f"Removed role '{role.name}' from {member} via console command")
-        return
-
-    if command_name == "status":
-        if len(parts) < 2:
-            logging.error("Usage: status {newStatus}")
-            return
-
-        status_text = " ".join(parts[1:])
-        activity = discord.Activity(type=discord.ActivityType.playing, name=status_text)
-        await bot.change_presence(activity=activity)
-        logging.info(f"Updated bot status to: {status_text}")
-        return
-
-    logging.error(f"Unknown console command: {command_name}")
-
-
-async def _pm2_restart_bot(delay: float = 1.0):
-    await asyncio.sleep(delay)
-    try:
-        process = await asyncio.create_subprocess_exec(
-            "pm2",
-            "restart",
-            "bot",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await process.communicate()
-        if stdout:
-            logging.info("pm2 restart bot stdout: %s", stdout.decode().strip())
-        if stderr:
-            logging.warning("pm2 restart bot stderr: %s", stderr.decode().strip())
-    except Exception as exc:
-        logging.exception("Failed to restart bot with pm2: %s", exc)
-
-
-def _register_jsk_restart_subcommand():
+def register_jsk_console_subcommand(
+    bot: commands.Bot,
+    *,
+    base_dir: str | PathLike[str],
+    owner_only: bool = True,
+) -> None:
+    """Register `jsk console` on a bot after the jishaku command tree is loaded."""
     jsk_command = bot.get_command("jsk")
     if jsk_command is None:
-        logging.warning("Unable to register jsk subcommands: jsk command not found.")
+        logging.warning("Unable to register jsk console subcommand: jsk command not found.")
         return
 
-    if not (getattr(jsk_command, "get_command", None) and jsk_command.get_command("restart")):
-        @commands.command(name="restart")
-        @commands.check(_can_use_jsk_restart)
-        async def jsk_restart(ctx):
-            await ctx.send("Restarting bot with PM2...")
-            asyncio.create_task(_pm2_restart_bot())
+    if getattr(jsk_command, "get_command", None) and jsk_command.get_command("console"):
+        return
 
-        jsk_command.add_command(jsk_restart)
-        logging.info("Registered jsk restart subcommand.")
+    resolved_base_dir = os.fspath(base_dir)
 
-    if not (getattr(jsk_command, "get_command", None) and jsk_command.get_command("console")):
-        @commands.command(name="console")
-        @commands.is_owner()
-        async def jsk_console(ctx):
-            previous_session = active_console_sessions.get(ctx.author.id)
-            if previous_session is not None:
-                await previous_session.close(reason="Replaced by a new console session.")
+    async def jsk_console(ctx: commands.Context):
+        previous_session = active_console_sessions.get(ctx.author.id)
+        if previous_session is not None:
+            await previous_session.close(reason="Replaced by a new console session.")
 
-            console_view = JskConsoleView(ctx.author)
-            try:
-                await console_view.start()
-            except Exception as exc:
-                logging.exception("Failed to start Discord console session: %s", exc)
-                await ctx.send(f"Failed to start console session: `{exc}`")
-                return
-            active_console_sessions[ctx.author.id] = console_view
-
-            message = await ctx.send(embed=console_view.build_embed(), view=console_view)
-            console_view.message = message
-            await console_view.refresh_message(force=True)
-
-        jsk_command.add_command(jsk_console)
-        logging.info("Registered jsk console subcommand.")
-
-
-async def console_command_loop():
-    while not bot.is_closed():
+        console_view = JskConsoleView(ctx.author, resolved_base_dir)
         try:
-            command_line = await asyncio.to_thread(input, "")
-        except EOFError:
-            logging.warning("Console input closed; stopping console command listener.")
+            await console_view.start()
+        except Exception as exc:
+            logging.exception("Failed to start Discord console session: %s", exc)
+            await ctx.send(f"Failed to start console session: `{exc}`")
             return
-        except Exception as exc:
-            logging.exception(f"Console listener failed while reading input: {exc}")
-            await asyncio.sleep(1)
-            continue
 
-        if not command_line.strip():
-            continue
+        active_console_sessions[ctx.author.id] = console_view
+        message = await ctx.send(embed=console_view.build_embed(), view=console_view)
+        console_view.message = message
+        await console_view.refresh_message(force=True)
 
-        try:
-            await handle_console_command(command_line.strip())
-        except Exception as exc:
-            logging.exception(f"Console command failed: {exc}")
+    wrapped_command = commands.command(name="console")(jsk_console)
+    if owner_only:
+        wrapped_command = commands.is_owner()(wrapped_command)
 
+    jsk_command.add_command(wrapped_command)
 
-@bot.event
-async def setup_hook():
-    await load_cogs()
-    try:
-        await bot.load_extension("jishaku")
-        _register_jsk_restart_subcommand()
-    except Exception:
-        pass
-
-
-@bot.event
-async def on_ready():
-    global console_task
-    if console_task is None or console_task.done():
-        console_task = asyncio.create_task(console_command_loop())
-        logging.info("Console command listener started.")
-    logging.info(f"Bot is ready! Logged in as {bot.user}")
-
-
-def run():
-    bot.run(TOKEN)

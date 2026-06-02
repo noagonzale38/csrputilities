@@ -89,7 +89,6 @@ LOGGING_CHANNEL_ID = 1323536942784188429
 SESSION_CHANNEL = 1159839282635227286
 ERRORS_CHANNEL = 1323534295108812817
 STAFF_FEEDBACK_CHANNEL = 1168268985918300250
-APPEALS_CHANNEL_ID = 1328489653539438756
 INFRACTION_CHANNEL = 1160348145989988535
 MOD_CHANNEL_ID = 1216491894390001674
 MOD_ROLE_ID = 1340104462680719431
@@ -101,6 +100,7 @@ modlogs_file = "modlogs.json"
 blacklisted_command = "blacklisted_users.txt"
 casefile = r"casefile.txt"
 report_blacklists = "report_blacklists.txt"
+feedback_blacklists = "feedback_blacklists.txt"
 afk_file = "afk.json"
 active_hits = "hits.json"
 testing_users_file = "testing_users.json"
@@ -143,26 +143,32 @@ def _role_check(role_ids):
     return commands.check(predicate)
 
 
-def _configured_role_check(permission_key):
+def _configured_permission_check(permission_key, *, allow_roles=True, allow_users=True):
     async def predicate(ctx):
         if not ctx.guild:
             raise commands.NoPrivateMessage()
-        configured_role_ids = get_permission_role_ids(ctx.guild.id, permission_key)
-        user_role_ids = {role.id for role in ctx.author.roles}
-        if user_role_ids & set(configured_role_ids):
-            return True
+
+        if allow_users:
+            configured_user_ids = set(get_permission_user_ids(ctx.guild.id, permission_key))
+            if ctx.author.id in configured_user_ids:
+                return True
+
+        if allow_roles:
+            configured_role_ids = set(get_permission_role_ids(ctx.guild.id, permission_key))
+            user_role_ids = {role.id for role in ctx.author.roles}
+            if user_role_ids & configured_role_ids:
+                return True
+
         raise commands.CheckFailure("You are not permitted to use this command")
     return commands.check(predicate)
 
 
+def _configured_role_check(permission_key):
+    return _configured_permission_check(permission_key, allow_roles=True, allow_users=True)
+
+
 def _configured_user_check(permission_key):
-    async def predicate(ctx):
-        if not ctx.guild:
-            raise commands.NoPrivateMessage()
-        if ctx.author.id in set(get_permission_user_ids(ctx.guild.id, permission_key)):
-            return True
-        raise commands.CheckFailure("You are not permitted to use this command.")
-    return commands.check(predicate)
+    return _configured_permission_check(permission_key, allow_roles=False, allow_users=True)
 
 
 def is_moderation():
@@ -197,6 +203,8 @@ def is_authorized():
 
 def is_authorized_user_or_role(ctx):
     if ctx.author.id in set(get_permission_user_ids(ctx.guild.id, "support")):
+        return True
+    if ctx.author.id in set(get_permission_user_ids(ctx.guild.id, "role_authorized")):
         return True
     authorized_role_ids = set(get_permission_role_ids(ctx.guild.id, "role_authorized"))
     for role in ctx.author.roles:

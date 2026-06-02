@@ -12,14 +12,15 @@ from config import (
     SERVER_KEY, LOGGING_CHANNEL_ID, ERRORS_CHANNEL, MODERATION_ROLE_IDS,
     CHANNEL_ID, BAN_CHANNEL, LOG_SERVER_URL, LOG_SERVER_AUTH,
     LATENCY_API_URL, MOD_CHANNEL_ID, MOD_ROLE_ID,
-    casefile, afk_file, CSRPUTILS_DEVS,
+    afk_file, CSRPUTILS_DEVS,
 )
 from cogs.helpers import (
     Colors, BLANK_COLOR, CSRP_ICON, CHECK, CROSS, PENDING, DEVELOPER,
-    success_embed, error_embed, info_embed, brand_footer, embed_description,
+    success_embed, error_embed, info_embed, brand_footer, embed_description, user_tag,
     api_get, api_post, generalised_interaction_check_failure,
 )
 from cogs.settings import get_guild_settings
+from modlog_store import get_next_case
 
 
 def load_afk():
@@ -147,16 +148,7 @@ class PendingBanView(discord.ui.View):
     @discord.ui.button(label="Confirm Ban", style=discord.ButtonStyle.danger)
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         member = interaction.guild.get_member(self.user.id)
-        case = "Unknown"
-        try:
-            with open(casefile, "r") as file:
-                number = int(file.read().strip())
-            number += 1
-            with open(casefile, "w") as file:
-                file.write(str(number))
-                case = number
-        except Exception:
-            pass
+        case = get_next_case()
         if member:
             try:
                 dm = await member.create_dm()
@@ -415,7 +407,7 @@ class Events(commands.Cog):
                 title="Command Logged",
                 description=(
                     f"> **Command:** `{ctx.command}`\n"
-                    f"> **User:** {ctx.author.mention}\n"
+                    f"> **User:** {user_tag(ctx.author)}\n"
                     f"> **Channel:** {ctx.channel.mention}"
                 ),
                 color=BLANK_COLOR,
@@ -466,7 +458,7 @@ class Events(commands.Cog):
                     description=embed_description(
                         (
                             f"> **Command:** `{ctx.command}`\n"
-                            f"> **User:** {ctx.author.mention}\n"
+                            f"> **User:** {user_tag(ctx.author)}\n"
                             f"> **Channel:** {ctx.channel.mention}\n"
                             f"> **Error ID:** `{error_id}`"
                         ),
@@ -663,6 +655,9 @@ class Events(commands.Cog):
     async def discord_checks(self):
         guild = self.bot.get_guild(965829463512330260)
         if not guild:
+            return
+        settings = get_guild_settings(guild.id)
+        if not settings.get("discord_checks_enabled", True):
             return
 
         try:

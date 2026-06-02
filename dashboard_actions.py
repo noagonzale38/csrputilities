@@ -19,10 +19,9 @@ from config import (
     REPORT_GUILD_ID,
     SERVER_KEY,
     blacklisted_command,
-    modlogs_file,
     report_blacklists,
 )
-from cogs.helpers import CSRP_ICON, api_get, api_post
+from cogs.helpers import CSRP_ICON, api_get, api_post, normalize_display_mentions
 from cogs.moderation import (
     clear_all_modlogs_data,
     clear_user_modlogs,
@@ -51,6 +50,7 @@ from cogs.staffmgmt import (
     remove_retirement,
     save_retirement,
 )
+from modlog_store import count_modlogs, get_modlogs_for_user as get_modlogs_for_user_db
 
 PRC_API = "https://api.erlc.gg/v1"
 PRC_HEADERS = {"Content-Type": "application/json", "Server-Key": SERVER_KEY}
@@ -62,6 +62,8 @@ MAX_ERLC_CUSTOM_ACTION_TOTAL_WAIT_SECONDS = 300
 MAX_ERLC_CUSTOM_ACTIONS = 50
 EVIDENCE_LOGS_FILE = "dashboard_evidence_logs.json"
 EVIDENCE_UPLOAD_DIR = Path("dashboard_evidence_uploads")
+EVIDENCE_REQUESTS_FILE = "dashboard_evidence_requests.json"
+EVIDENCE_REQUEST_UPLOAD_DIR = Path("dashboard_evidence_request_uploads")
 MAX_EVIDENCE_MEDIA_ITEMS = 3
 MAX_EVIDENCE_DESCRIPTION_LENGTH = 1500
 MAX_EVIDENCE_USERNAME_LENGTH = 100
@@ -232,6 +234,66 @@ def _safe_evidence_url(url: str) -> str:
     return cleaned_url
 
 
+def _sanitize_evidence_request_submission(entry: dict) -> dict | None:
+    if not isinstance(entry, dict):
+        return None
+
+    submission_id = str(entry.get("id", "")).strip()
+    submitter_name = str(entry.get("submitter_name", "")).strip()
+    description = str(entry.get("description", "")).strip()
+    raw_media_items = entry.get("media_items", [])
+    if not isinstance(raw_media_items, list):
+        raw_media_items = []
+    media_items = [
+        item
+        for item in (_sanitize_evidence_media_item(media_item) for media_item in raw_media_items)
+        if item
+    ]
+
+    if not submission_id or not submitter_name or not media_items:
+        return None
+
+    return {
+        "id": submission_id,
+        "submitter_name": submitter_name[:MAX_EVIDENCE_USERNAME_LENGTH],
+        "description": description[:MAX_EVIDENCE_DESCRIPTION_LENGTH],
+        "media_items": media_items[:MAX_EVIDENCE_MEDIA_ITEMS],
+        "created_at": int(entry.get("created_at", 0) or 0),
+    }
+
+
+def _sanitize_evidence_request(entry: dict) -> dict | None:
+    if not isinstance(entry, dict):
+        return None
+
+    request_id = str(entry.get("id", "")).strip()
+    target_username = str(entry.get("target_username", "")).strip()
+    prompt = str(entry.get("prompt", "")).strip()
+    raw_submissions = entry.get("submissions", [])
+    if not isinstance(raw_submissions, list):
+        raw_submissions = []
+    submissions = [
+        submission
+        for submission in (_sanitize_evidence_request_submission(item) for item in raw_submissions)
+        if submission
+    ]
+
+    if not request_id or not target_username or not prompt:
+        return None
+
+    return {
+        "id": request_id,
+        "target_user_id": str(entry.get("target_user_id", "")).strip(),
+        "target_username": target_username[:MAX_EVIDENCE_USERNAME_LENGTH],
+        "target_lookup": str(entry.get("target_lookup", "")).strip() or _normalize_user_lookup(target_username),
+        "prompt": prompt[:MAX_EVIDENCE_DESCRIPTION_LENGTH],
+        "status": "closed" if str(entry.get("status", "")).strip().lower() == "closed" else "open",
+        "created_by": str(entry.get("created_by", "")).strip(),
+        "created_at": int(entry.get("created_at", 0) or 0),
+        "submissions": sorted(submissions, key=lambda item: item["created_at"], reverse=True),
+    }
+
+
 def _sanitize_evidence_media_item(item: dict) -> dict | None:
     if not isinstance(item, dict):
         return None
@@ -325,6 +387,18 @@ def _save_evidence_logs(entries: list[dict]) -> None:
         json.dump(entries, file, indent=4)
 
 
+def load_evidence_requests() -> list[dict]:
+    entries = _load_json_file(EVIDENCE_REQUESTS_FILE, [])
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in (_sanitize_evidence_request(item) for item in entries) if entry]
+
+
+def _save_evidence_requests(entries: list[dict]) -> None:
+    with open(EVIDENCE_REQUESTS_FILE, "w") as file:
+        json.dump(entries, file, indent=4)
+
+
 def _public_evidence_payload(entry: dict, public_origin: str) -> dict:
     media_items = []
     for media_item in entry["media_items"]:
@@ -370,6 +444,79 @@ def get_evidence_by_code(evidence_id: str) -> dict | None:
     if not target_id:
         return None
     return next((entry for entry in load_evidence_logs() if entry["id"] == target_id), None)
+
+
+def evidence_request_upload_directory(request_id: str, submission_id: str) -> Path:
+    return EVIDENCE_REQUEST_UPLOAD_DIR / str(request_id) / str(submission_id)
+
+
+def _public_evidence_request_submission_payload(request_id: str, submission: dict) -> dict:
+    media_items = []
+    for media_item in submission["media_items"]:
+        media_url = media_item["media_url"]
+        if media_item["media_source"] == "upload":
+            media_url = f"/api/evidence-request-media/{quote(request_id)}/{quote(submission['id'])}/{quote(media_item['filename'])}"
+        media_items.append({
+            "media_source": media_item["media_source"],
+            "media_type": media_item["media_type"],
+            "media_url": media_url,
+            "filename": media_item["filename"],
+        })
+
+    return {
+        "id": submission["id"],
+        "submitter_name": submission["submitter_name"],
+        "description": submission.get("description", ""),
+        "media_items": media_items,
+        "created_at": submission["created_at"],
+    }
+
+
+def _public_evidence_request_payload(entry: dict, public_origin: str, include_submissions: bool) -> dict:
+    payload = {
+        "id": entry["id"],
+        "target_user_id": entry.get("target_user_id", ""),
+        "target_username": entry["target_username"],
+        "prompt": entry["prompt"],
+        "status": entry.get("status", "open"),
+        "created_by": entry.get("created_by", ""),
+        "created_at": int(entry.get("created_at", 0) or 0),
+        "submission_count": len(entry.get("submissions", [])),
+        "public_url": f"{public_origin.rstrip('/')}/evidence-request/{quote(entry['id'])}",
+    }
+    if include_submissions:
+        payload["submissions"] = [
+            _public_evidence_request_submission_payload(entry["id"], submission)
+            for submission in entry.get("submissions", [])
+        ]
+    return payload
+
+
+def public_evidence_request_payload(entry: dict, public_origin: str, include_submissions: bool = False) -> dict:
+    sanitized_entry = _sanitize_evidence_request(entry)
+    if sanitized_entry is None:
+        raise RuntimeError("Evidence request is invalid.")
+    return _public_evidence_request_payload(sanitized_entry, public_origin, include_submissions)
+
+
+def get_evidence_request_by_code(request_id: str) -> dict | None:
+    target_id = str(request_id or "").strip()
+    if not target_id:
+        return None
+    return next((entry for entry in load_evidence_requests() if entry["id"] == target_id), None)
+
+
+def get_evidence_requests_for_user(username: str, resolved_user_id: int | None, public_origin: str) -> list[dict]:
+    normalized_lookup = _normalize_user_lookup(username)
+    raw_username = str(username or "").strip()
+    matches = []
+    for entry in load_evidence_requests():
+        user_id_matches = resolved_user_id is not None and entry.get("target_user_id") == str(resolved_user_id)
+        raw_id_matches = raw_username.isdigit() and entry.get("target_user_id") == raw_username
+        name_matches = normalized_lookup and entry.get("target_lookup") == normalized_lookup
+        if user_id_matches or raw_id_matches or name_matches:
+            matches.append(_public_evidence_request_payload(entry, public_origin, include_submissions=True))
+    return sorted(matches, key=lambda item: item["created_at"], reverse=True)
 
 
 def get_evidence_for_user(username: str, resolved_user_id: int | None, public_origin: str) -> list[dict]:
@@ -501,6 +648,123 @@ async def create_evidence_log(bot, actor_id: int, form_data: dict, uploaded_file
     entries.append(entry)
     _save_evidence_logs(entries)
     return _public_evidence_payload(entry, public_origin)
+
+
+async def create_evidence_request(bot, actor_id: int, form_data: dict, public_origin: str) -> dict:
+    target_username = str(form_data.get("target_username", "")).strip().lstrip("@")
+    prompt = str(form_data.get("prompt", "")).strip()
+    if not target_username:
+        raise RuntimeError("Add the username this upload request belongs to.")
+    if not prompt:
+        raise RuntimeError("Add instructions for the user upload request.")
+
+    target_user_id = ""
+    stored_username = target_username[:MAX_EVIDENCE_USERNAME_LENGTH]
+    try:
+        resolved_user = await resolve_user(bot, target_username)
+        target_user_id = str(resolved_user.id)
+        stored_username = (
+            getattr(resolved_user, "display_name", None)
+            or getattr(resolved_user, "global_name", None)
+            or getattr(resolved_user, "name", target_username)
+        )[:MAX_EVIDENCE_USERNAME_LENGTH]
+    except RuntimeError:
+        pass
+
+    entries = load_evidence_requests()
+    request_id = _evidence_code()
+    while any(entry["id"] == request_id for entry in entries):
+        request_id = _evidence_code()
+
+    entry = {
+        "id": request_id,
+        "target_user_id": target_user_id,
+        "target_username": stored_username,
+        "target_lookup": _normalize_user_lookup(target_username),
+        "prompt": prompt[:MAX_EVIDENCE_DESCRIPTION_LENGTH],
+        "status": "open",
+        "created_by": str(actor_id),
+        "created_at": int(time.time()),
+        "submissions": [],
+    }
+    entries.append(entry)
+    _save_evidence_requests(entries)
+    return _public_evidence_request_payload(entry, public_origin, include_submissions=True)
+
+
+def submit_evidence_request(form_data: dict, uploaded_files, request_id: str, public_origin: str) -> dict:
+    request_entry = get_evidence_request_by_code(request_id)
+    if request_entry is None:
+        raise RuntimeError("This upload request was not found.")
+    if request_entry.get("status") != "open":
+        raise RuntimeError("This upload request is closed.")
+
+    submitter_name = str(form_data.get("submitter_name", "")).strip().lstrip("@")
+    description = str(form_data.get("description", "")).strip()
+    uploaded_files = [
+        uploaded_file
+        for uploaded_file in (uploaded_files or [])
+        if uploaded_file and getattr(uploaded_file, "filename", "")
+    ]
+    linked_media_urls = _form_media_urls(form_data)
+    evidence_item_count = len(uploaded_files) + len(linked_media_urls)
+
+    if not submitter_name:
+        raise RuntimeError("Add your username before submitting.")
+    if evidence_item_count == 0:
+        raise RuntimeError("Add at least one upload or media link.")
+    if evidence_item_count > MAX_EVIDENCE_MEDIA_ITEMS:
+        raise RuntimeError(f"You can submit up to {MAX_EVIDENCE_MEDIA_ITEMS} uploads or links at once.")
+
+    validated_links = [_safe_evidence_url(linked_media_url) for linked_media_url in linked_media_urls]
+    submission_id = uuid.uuid4().hex[:10]
+    upload_dir = evidence_request_upload_directory(request_id, submission_id)
+    media_items = []
+
+    for index, uploaded_file in enumerate(uploaded_files, start=1):
+        original_filename = secure_filename(uploaded_file.filename or "")
+        if not original_filename:
+            raise RuntimeError("Uploaded evidence needs a valid file name.")
+        media_type = _evidence_media_type(original_filename) or ""
+        if media_type == "":
+            raise RuntimeError("Uploaded evidence must be an image, GIF, or video.")
+
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"submission-{index}{Path(original_filename).suffix.lower()}"
+        uploaded_file.save(upload_dir / filename)
+        media_items.append({
+            "media_source": "upload",
+            "media_type": media_type,
+            "media_url": "",
+            "filename": filename,
+        })
+
+    for media_url in validated_links:
+        media_items.append({
+            "media_source": "link",
+            "media_type": _evidence_media_type(media_url) or "",
+            "media_url": media_url,
+            "filename": "",
+        })
+
+    submission = {
+        "id": submission_id,
+        "submitter_name": submitter_name[:MAX_EVIDENCE_USERNAME_LENGTH],
+        "description": description[:MAX_EVIDENCE_DESCRIPTION_LENGTH],
+        "media_items": media_items,
+        "created_at": int(time.time()),
+    }
+
+    entries = load_evidence_requests()
+    for index, entry in enumerate(entries):
+        if entry["id"] == request_id:
+            updated_entry = dict(entry)
+            updated_entry["submissions"] = [submission, *entry.get("submissions", [])]
+            entries[index] = updated_entry
+            _save_evidence_requests(entries)
+            return _public_evidence_request_payload(updated_entry, public_origin, include_submissions=False)
+
+    raise RuntimeError("This upload request was not found.")
 
 
 def _parse_discord_user_id(identifier: Any) -> int | None:
@@ -729,7 +993,6 @@ async def run_dashboard_unban_command(bot, actor_id: int, user_identifier: Any, 
 
 async def collect_dashboard_stats(bot) -> dict:
     guild = await get_target_guild(bot)
-    modlogs = _load_json_file(modlogs_file, [])
     retirements = load_retirements().get(str(guild.id), {})
     command_blacklist_count = len(_load_lines(blacklisted_command))
     report_blacklist_count = len(_load_lines(report_blacklists))
@@ -749,7 +1012,7 @@ async def collect_dashboard_stats(bot) -> dict:
         "member_count": guild.member_count or len(guild.members),
         "role_count": len(guild.roles),
         "channel_count": len(guild.channels),
-        "modlog_count": len(modlogs),
+        "modlog_count": count_modlogs(),
         "retirement_count": len(retirements),
         "command_blacklist_count": command_blacklist_count,
         "report_blacklist_count": report_blacklist_count,
@@ -1023,7 +1286,7 @@ async def perform_unmute(bot, actor_id: int, target_id: int, reason: str) -> str
 
 async def perform_infract(bot, actor_id: int, target_id: int, punishment: str, reason: str) -> str:
     actor = await get_actor_member(bot, actor_id)
-    member = await get_member(bot, target_id)
+    user = await resolve_user(bot, target_id)
     channel = bot.get_channel(INFRACTION_CHANNEL)
     if channel is None:
         raise RuntimeError("Infraction channel is unavailable.")
@@ -1032,7 +1295,7 @@ async def perform_infract(bot, actor_id: int, target_id: int, punishment: str, r
     embed = discord.Embed(
         title="CSRP Infraction",
         description=(
-            f"**User:** {member.mention}\n"
+            f"**User:** {user.mention}\n"
             f"**Action:** {punishment}\n"
             f"**Reason:** {reason}\n"
             f"**Reference ID:** `{reference_id}`"
@@ -1040,30 +1303,30 @@ async def perform_infract(bot, actor_id: int, target_id: int, punishment: str, r
         color=discord.Color.blue(),
     )
     embed.set_footer(text=f"Signed by {actor}", icon_url=actor.display_avatar.url)
-    await channel.send(content=member.mention, embed=embed)
+    await channel.send(content=user.mention, embed=embed)
 
-    dm_embed = discord.Embed(
-        title="Infraction Notice",
-        description=(
-            f"You have been infracted in **{member.guild.name}**.\n\n"
-            f"> **Punishment:** {punishment}\n"
-            f"> **Reason:** {reason}\n"
-            f"> **Reference ID:** `{reference_id}`"
-        ),
-        color=discord.Color.blurple(),
-    )
-    dm_embed.set_author(name=member.guild.name, icon_url=CSRP_ICON)
-    try:
-        await member.send(embed=dm_embed)
-    except discord.HTTPException:
-        pass
-    save_modlog(member.id, f"Infraction: {punishment}", reason, actor.id, reference_id)
-    return f"Infracted {member.display_name} with reference #{reference_id}."
+    if isinstance(user, discord.Member):
+        dm_embed = discord.Embed(
+            title="Infraction Notice",
+            description=(
+                f"You have been infracted in **{user.guild.name}**.\n\n"
+                f"> **Punishment:** {punishment}\n"
+                f"> **Reason:** {reason}\n"
+                f"> **Reference ID:** `{reference_id}`"
+            ),
+            color=discord.Color.blurple(),
+        )
+        dm_embed.set_author(name=user.guild.name, icon_url=CSRP_ICON)
+        try:
+            await user.send(embed=dm_embed)
+        except discord.HTTPException:
+            pass
+
+    return f"Infracted {getattr(user, 'display_name', user.name)} with reference #{reference_id}."
 
 
 def get_modlogs_for_user(user_id: int) -> list[dict]:
-    modlogs = _load_json_file(modlogs_file, [])
-    return [entry for entry in modlogs if int(entry.get("user_id", 0)) == int(user_id)]
+    return get_modlogs_for_user_db(user_id)
 
 
 async def clear_modlogs_for_user(target_id: int) -> str:
@@ -1177,29 +1440,41 @@ async def send_custom_embed(bot, actor_id: int, payload: dict) -> str:
         raise RuntimeError("Embed target channel was not found.")
 
     embed = discord.Embed(
-        title=payload.get("title") or None,
-        description=payload.get("description") or None,
+        title=normalize_display_mentions(payload.get("title")) or None,
+        description=normalize_display_mentions(payload.get("description")) or None,
         color=discord.Color(int((payload.get("color") or "2B2D31").replace("#", ""), 16)),
         url=payload.get("url") or None,
         timestamp=discord.utils.utcnow() if payload.get("timestamp") == "on" else None,
     )
     if payload.get("author_name"):
         embed.set_author(
-            name=payload["author_name"],
+            name=normalize_display_mentions(payload["author_name"]),
             icon_url=payload.get("author_icon_url") or None,
             url=payload.get("author_url") or None,
         )
     if payload.get("footer_text"):
-        embed.set_footer(text=payload["footer_text"], icon_url=payload.get("footer_icon_url") or None)
+        embed.set_footer(
+            text=normalize_display_mentions(payload["footer_text"]),
+            icon_url=payload.get("footer_icon_url") or None,
+        )
     if payload.get("thumbnail_url"):
         embed.set_thumbnail(url=payload["thumbnail_url"])
     if payload.get("image_url"):
         embed.set_image(url=payload["image_url"])
 
     for name, value, inline in _parse_fields(payload.get("fields", "")):
-        embed.add_field(name=name, value=value, inline=inline)
+        embed.add_field(
+            name=normalize_display_mentions(name),
+            value=normalize_display_mentions(value),
+            inline=inline,
+        )
 
-    await channel.send(content=payload.get("content") or None, embed=embed)
+    await channel.send(
+        content=normalize_display_mentions(payload.get("content")) or None,
+        embed=embed,
+        legacy_embeds=True,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
     return f"Sent custom embed to #{channel.name} for {actor.display_name}."
 
 
@@ -1287,6 +1562,7 @@ async def update_dashboard_settings(guild_id: int, form_data: dict) -> str:
         raw_value = form_data.get(key, "").strip()
         update_guild_setting(guild_id, key, int(raw_value) if raw_value else None)
 
+    update_guild_setting(guild_id, "discord_checks_enabled", form_data.get("discord_checks_enabled") == "on")
     update_guild_setting(guild_id, "feedback_enabled", form_data.get("feedback_enabled") == "on")
     questions = [line.strip() for line in form_data.get("feedback_questions", "").splitlines() if line.strip()]
     update_guild_setting(guild_id, "feedback_questions", questions or DEFAULT_SETTINGS["feedback_questions"])

@@ -32,17 +32,22 @@ from dashboard_actions import (
     collect_dashboard_stats,
     create_erlc_custom_action,
     create_evidence_log,
+    create_evidence_request,
     delete_erlc_custom_action,
     evidence_upload_directory,
+    evidence_request_upload_directory,
     fetch_erlc_players,
     fetch_erlc_server,
     get_evidence_by_code,
     get_evidence_for_user,
+    get_evidence_request_by_code,
+    get_evidence_requests_for_user,
     get_actor_member,
     get_modlogs_for_user,
     get_target_guild,
     load_erlc_custom_actions,
     public_evidence_payload,
+    public_evidence_request_payload,
     run_dashboard_ban_command,
     run_dashboard_command,
     run_dashboard_member_command,
@@ -51,6 +56,7 @@ from dashboard_actions import (
     resolve_user_id,
     send_bot_message,
     send_custom_embed,
+    submit_evidence_request,
     unblacklist_command_user,
     update_bot_status,
     update_dashboard_settings,
@@ -392,6 +398,7 @@ def _dashboard_context():
 
     evidence_user = request.args.get("evidence_user", "").strip()
     evidence_results = None
+    evidence_request_results = None
     if evidence_user and feature_access.get("moderation"):
         resolved_evidence_user_id = None
         try:
@@ -399,6 +406,11 @@ def _dashboard_context():
         except Exception:
             pass
         evidence_results = get_evidence_for_user(evidence_user, resolved_evidence_user_id, _dashboard_public_origin())
+        evidence_request_results = get_evidence_requests_for_user(
+            evidence_user,
+            resolved_evidence_user_id,
+            _dashboard_public_origin(),
+        )
 
     return {
         "member": member,
@@ -418,6 +430,7 @@ def _dashboard_context():
         "modlog_results": modlog_results,
         "modlog_user_id": modlog_user_id,
         "evidence_results": evidence_results,
+        "evidence_request_results": evidence_request_results,
         "evidence_user": evidence_user,
         "rank_order": RANK_ORDER,
         "permission_role_labels": PERMISSION_ROLE_LABELS,
@@ -553,6 +566,7 @@ def _json_dashboard_context():
         "modlog_results": context["modlog_results"],
         "modlog_user_id": context["modlog_user_id"],
         "evidence_results": context["evidence_results"],
+        "evidence_request_results": context["evidence_request_results"],
         "evidence_user": context["evidence_user"],
         "rank_order": context["rank_order"],
         "permission_role_labels": context["permission_role_labels"],
@@ -724,6 +738,7 @@ def api_evidence_search():
 
     return jsonify({
         "evidence": get_evidence_for_user(username, resolved_user_id, _dashboard_public_origin()),
+        "requests": get_evidence_requests_for_user(username, resolved_user_id, _dashboard_public_origin()),
     })
 
 
@@ -737,6 +752,51 @@ def api_evidence_detail(evidence_id):
         message, status = access_error
         return jsonify({"error": message}), status
     return jsonify({"evidence": public_evidence_payload(evidence, _dashboard_public_origin())})
+
+
+@app.route("/api/evidence-requests/<request_id>")
+def api_evidence_request_detail(request_id):
+    evidence_request = get_evidence_request_by_code(request_id)
+    if evidence_request is None:
+        return jsonify({"error": "Upload request was not found."}), 404
+    return jsonify({"request": public_evidence_request_payload(evidence_request, _dashboard_public_origin())})
+
+
+@app.route("/api/evidence-requests/<request_id>/submit", methods=["POST"])
+def api_evidence_request_submit(request_id):
+    try:
+        result = submit_evidence_request(
+            request.form,
+            request.files.getlist("evidence_files") or [request.files.get("evidence_file")],
+            request_id,
+            _dashboard_public_origin(),
+        )
+        return jsonify({"ok": True, "message": "Evidence uploaded successfully.", "request": result})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.route("/api/evidence-request-media/<request_id>/<submission_id>/<path:filename>")
+@login_required
+def api_evidence_request_media(request_id, submission_id, filename):
+    member = current_member()
+    if member is None or not member_has_access([role.id for role in member.roles], "moderation"):
+        abort(403)
+
+    evidence_request = get_evidence_request_by_code(request_id)
+    if evidence_request is None:
+        abort(404)
+
+    uploaded_filenames = {
+        item["filename"]
+        for submission in evidence_request.get("submissions", [])
+        if submission.get("id") == submission_id
+        for item in submission.get("media_items", [])
+        if item.get("media_source") == "upload"
+    }
+    if filename not in uploaded_filenames:
+        abort(404)
+    return send_from_directory(evidence_request_upload_directory(request_id, submission_id), filename)
 
 
 @app.route("/api/evidence-media/<evidence_id>/<path:filename>")
@@ -817,6 +877,17 @@ def dashboard_action(action):
                 )
             ),
         ),
+        "evidence_request_create": (
+            "moderation",
+            lambda: run_async(
+                create_evidence_request(
+                    bot,
+                    actor_id,
+                    request.form,
+                    _dashboard_public_origin(),
+                )
+            ),
+        ),
         "infract": (
             "infractions",
             lambda: run_member_command(
@@ -867,6 +938,8 @@ def dashboard_action(action):
             return action_response(message=result[:500])
         elif action == "evidence_log":
             return action_response(message=f"Evidence logged: {result['public_url']}", evidence=result)
+        elif action == "evidence_request_create":
+            return action_response(message=f"Upload request created: {result['public_url']}", evidence_request=result)
         else:
             return action_response(message=result)
     except Exception as exc:

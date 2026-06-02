@@ -10,6 +10,7 @@ import json
 import tempfile
 import pyttsx3
 import aiohttp
+from pathlib import Path
 
 from config import afk_file, ALLOWED_ROLE_ID
 from cogs.helpers import (
@@ -121,6 +122,7 @@ EIGHT_BALL_RESPONSES = [
 ]
 
 blacklisted_users = [740324586234708028, 736978544869113927]
+SHIP_STATS_FILE = Path(__file__).resolve().parent.parent / "ship_stats.json"
 
 
 def load_afk():
@@ -131,6 +133,99 @@ def load_afk():
 def save_afk(data):
     with open(afk_file, "w") as f:
         json.dump(data, f, indent=4)
+
+
+def load_ship_stats() -> dict:
+    try:
+        with open(SHIP_STATS_FILE, "r") as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                return data
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return {}
+
+
+def save_ship_stats(data: dict):
+    with open(SHIP_STATS_FILE, "w") as f:
+        json.dump(data, f, indent=4)
+
+
+def _ship_pair_key(user1_id: int, user2_id: int) -> str:
+    smaller, larger = sorted((str(user1_id), str(user2_id)))
+    return f"{smaller}:{larger}"
+
+
+def _get_ship_pair_entry(data: dict, guild_id: int, user1: discord.abc.User, user2: discord.abc.User) -> dict:
+    guild_key = str(guild_id)
+    pair_key = _ship_pair_key(user1.id, user2.id)
+    guild_stats = data.setdefault(guild_key, {})
+    pair_stats = guild_stats.setdefault(pair_key, {
+        "users": {
+            str(user1.id): user1.display_name,
+            str(user2.id): user2.display_name,
+        },
+        "count": 0,
+        "total_score": 0,
+    })
+
+    users = pair_stats.setdefault("users", {})
+    users[str(user1.id)] = user1.display_name
+    users[str(user2.id)] = user2.display_name
+    return pair_stats
+
+
+def get_ship_override(guild_id: int, user1_id: int, user2_id: int) -> int | None:
+    data = load_ship_stats()
+    guild_key = str(guild_id)
+    pair_key = _ship_pair_key(user1_id, user2_id)
+    pair_stats = data.get(guild_key, {}).get(pair_key, {})
+    override_score = pair_stats.get("override_score")
+    if override_score is None:
+        return None
+    return int(override_score)
+
+
+def set_ship_override(guild_id: int, user1: discord.Member, user2: discord.Member, score: int) -> None:
+    data = load_ship_stats()
+    pair_stats = _get_ship_pair_entry(data, guild_id, user1, user2)
+    pair_stats["override_score"] = score
+    save_ship_stats(data)
+
+
+def get_ship_pair_stats(guild_id: int, user1_id: int, user2_id: int) -> dict:
+    data = load_ship_stats()
+    guild_key = str(guild_id)
+    pair_key = _ship_pair_key(user1_id, user2_id)
+    guild_stats = data.get(guild_key, {})
+    pair_stats = guild_stats.get(pair_key, {})
+
+    count = int(pair_stats.get("count", 0))
+    total_score = int(pair_stats.get("total_score", 0))
+    average_score = round(total_score / count) if count else 0
+
+    return {
+        "count": count,
+        "total_score": total_score,
+        "average_score": average_score,
+    }
+
+
+def record_ship_pair(guild_id: int, user1: discord.Member, user2: discord.Member, score: int) -> dict:
+    data = load_ship_stats()
+    pair_stats = _get_ship_pair_entry(data, guild_id, user1, user2)
+    pair_stats["count"] = int(pair_stats.get("count", 0)) + 1
+    pair_stats["total_score"] = int(pair_stats.get("total_score", 0)) + score
+
+    save_ship_stats(data)
+
+    count = pair_stats["count"]
+    average_score = round(pair_stats["total_score"] / count)
+    return {
+        "count": count,
+        "total_score": pair_stats["total_score"],
+        "average_score": average_score,
+    }
 
 
 class TriviaAnswerModal(Modal):
@@ -376,7 +471,10 @@ class Fun(commands.Cog):
             await ctx.send(embed=error_embed("Invalid Users", "You can't ship someone with themselves!"))
             return
 
-        chance = random.randint(0, 100)
+        override_score = get_ship_override(ctx.guild.id, user1.id, user2.id)
+        chance = override_score if override_score is not None else random.randint(0, 100)
+        previous_stats = get_ship_pair_stats(ctx.guild.id, user1.id, user2.id)
+        updated_stats = record_ship_pair(ctx.guild.id, user1, user2, chance)
         if chance <= 25:
             verdict = "NOT meant to be together. RUN!"
         elif chance <= 50:
@@ -393,13 +491,49 @@ class Fun(commands.Cog):
             title=f"Ship — {user1.display_name} & {user2.display_name}",
             description=(
                 f"> **Verdict:** {verdict}\n"
-                f"> **Compatibility:** `{bar}` **{chance}%**"
+                f"> **Compatibility:** `{bar}` **{chance}%**\n"
+                f"> **Times Shipped:** **{updated_stats['count']}**\n"
+                f"> **Average Compatibility:** **{updated_stats['average_score']}%**"
             ),
             color=BLANK_COLOR,
-        )
+            )
+        if previous_stats["count"]:
+            embed.add_field(
+                name="Previous Stats",
+                value=(
+                    f"> **Previous Ships:** **{previous_stats['count']}**\n"
+                    f"> **Previous Average:** **{previous_stats['average_score']}%**"
+                ),
+                inline=False,
+            )
+        if override_score is not None:
+            embed.add_field(
+                name="Override Active",
+                value=f"> This pair has a forced compatibility of **{override_score}%**.",
+                inline=False,
+            )
         embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else "")
         brand_footer(embed)
         await ctx.send(embed=embed)
+
+    @commands.command(name="shipoverride")
+    @commands.guild_only()
+    @commands.is_owner()
+    async def shipoverride(self, ctx: commands.Context, user1: discord.Member, user2: discord.Member, percent: int):
+        if user1 == user2:
+            await ctx.send(embed=error_embed("Invalid Users", "You can't ship someone with themselves!"))
+            return
+        if percent < 0 or percent > 100:
+            await ctx.send(embed=error_embed("Invalid Percentage", "Ship override percent must be between `0` and `100`."))
+            return
+
+        set_ship_override(ctx.guild.id, user1, user2, percent)
+        await ctx.send(
+            embed=success_embed(
+                "Ship Override Set",
+                f"Forced **{user1.display_name}** and **{user2.display_name}** to ship at **{percent}%**.",
+            )
+        )
 
     @commands.hybrid_command(name="coinflip", description="Flip a coin!")
     async def coinflip(self, ctx):

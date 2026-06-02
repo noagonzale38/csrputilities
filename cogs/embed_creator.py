@@ -8,7 +8,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
-from cogs.helpers import BLANK_COLOR, CSRP_ICON, brand_footer, error_embed, success_embed
+from cogs.helpers import BLANK_COLOR, CSRP_ICON, brand_footer, error_embed, normalize_display_mentions, success_embed
 from cogs.settings import has_setting_permission
 
 EMBED_MESSAGES_FILE = "embed_messages.json"
@@ -135,8 +135,8 @@ def build_embed(config: dict) -> Optional[discord.Embed]:
         return None
 
     embed = discord.Embed(
-        title=config.get("title") or None,
-        description=config.get("description") or None,
+        title=normalize_display_mentions(config.get("title")) or None,
+        description=normalize_display_mentions(config.get("description")) or None,
         url=config.get("url") or None,
         color=parse_color(config.get("color")),
     )
@@ -145,13 +145,13 @@ def build_embed(config: dict) -> Optional[discord.Embed]:
 
     if config.get("author_name"):
         embed.set_author(
-            name=config.get("author_name"),
+            name=normalize_display_mentions(config.get("author_name")),
             url=config.get("author_url") or None,
             icon_url=config.get("author_icon_url") or None,
         )
     if config.get("footer_text"):
         embed.set_footer(
-            text=config.get("footer_text"),
+            text=normalize_display_mentions(config.get("footer_text")),
             icon_url=config.get("footer_icon_url") or None,
         )
     if config.get("image_url"):
@@ -160,8 +160,8 @@ def build_embed(config: dict) -> Optional[discord.Embed]:
         embed.set_thumbnail(url=config.get("thumbnail_url"))
 
     for field in config.get("fields", [])[:25]:
-        name = field.get("name", "").strip()
-        value = field.get("value", "").strip()
+        name = normalize_display_mentions(field.get("name", "").strip())
+        value = normalize_display_mentions(field.get("value", "").strip())
         if name and value:
             embed.add_field(name=name, value=value, inline=bool(field.get("inline")))
     return embed
@@ -171,15 +171,19 @@ def build_ephemeral_embeds(payload: dict) -> list[discord.Embed]:
     embed = None
     if payload.get("embed_title") or payload.get("embed_description") or payload.get("embed_fields"):
         embed = discord.Embed(
-            title=payload.get("embed_title") or None,
-            description=payload.get("embed_description") or None,
+            title=normalize_display_mentions(payload.get("embed_title")) or None,
+            description=normalize_display_mentions(payload.get("embed_description")) or None,
             color=parse_color(payload.get("embed_color")),
         )
         if payload.get("embed_footer"):
-            embed.set_footer(text=payload["embed_footer"])
+            embed.set_footer(text=normalize_display_mentions(payload["embed_footer"]))
         for field in payload.get("embed_fields", [])[:25]:
             if field.get("name") and field.get("value"):
-                embed.add_field(name=field["name"], value=field["value"], inline=bool(field.get("inline")))
+                embed.add_field(
+                    name=normalize_display_mentions(field["name"]),
+                    value=normalize_display_mentions(field["value"]),
+                    inline=bool(field.get("inline")),
+                )
     return [embed] if embed else []
 
 
@@ -327,9 +331,10 @@ class BuiltMessageView(discord.ui.View):
         async def callback(interaction: discord.Interaction):
             embeds = build_ephemeral_embeds(component)
             await interaction.response.send_message(
-                content=component.get("content") or None,
+                content=normalize_display_mentions(component.get("content")) or None,
                 embeds=embeds,
                 ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
         return callback
 
@@ -343,9 +348,10 @@ class BuiltMessageView(discord.ui.View):
                 return
             embeds = build_ephemeral_embeds(chosen)
             await interaction.response.send_message(
-                content=chosen.get("content") or None,
+                content=normalize_display_mentions(chosen.get("content")) or None,
                 embeds=embeds,
                 ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
         return callback
 
@@ -1335,10 +1341,11 @@ class EmbedWizardView(discord.ui.View):
             embeds = [e for e in (build_embed(c) for c in wizard.draft["embeds"]) if e][:2]
             pv = BuiltMessageView(copy.deepcopy(wizard.draft), timeout=300) if wizard.draft.get("components") else None
             await interaction.response.send_message(
-                content=wizard.draft.get("content") or None,
+                content=normalize_display_mentions(wizard.draft.get("content")) or None,
                 embeds=embeds or None,
                 view=pv,
                 ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
 
         preview_btn.callback = on_preview
@@ -1438,9 +1445,10 @@ class EmbedWizardView(discord.ui.View):
         outgoing_view = BuiltMessageView(copy.deepcopy(self.draft), timeout=None) if self.draft.get("components") else None
         try:
             sent_message = await channel.send(
-                content=self.draft.get("content") or None,
+                content=normalize_display_mentions(self.draft.get("content")) or None,
                 embeds=embeds or None,
                 view=outgoing_view,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
         except discord.Forbidden:
             await interaction.response.send_message(

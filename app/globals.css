@@ -1020,6 +1020,15 @@ option {
   align-items: start;
 }
 
+.evidence-side-column,
+.evidence-submission-list,
+.evidence-submission-card,
+.evidence-submit-form,
+.evidence-submission-media {
+  display: grid;
+  gap: 14px;
+}
+
 .file-field,
 .input-with-icon {
   position: relative;
@@ -1205,6 +1214,30 @@ option {
   font-size: .88rem;
 }
 
+.evidence-submission-card {
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--field) 82%, transparent);
+}
+
+.evidence-submission-media {
+  grid-template-columns: repeat(auto-fit, minmax(120px, max-content));
+  gap: 8px;
+}
+
+.evidence-submission-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 8px 12px;
+  color: var(--muted-strong);
+  text-decoration: none;
+  font-weight: 850;
+}
+
 .evidence-badge {
   display: inline-flex;
   align-items: center;
@@ -1347,6 +1380,16 @@ option {
   border-radius: 6px;
   object-fit: contain;
   background: #050606;
+}
+
+.evidence-submit-form {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 24px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .055), transparent),
+    var(--panel);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .24);
 }
 
 .settings-form {

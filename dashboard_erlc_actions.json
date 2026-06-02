@@ -1,26 +1,5 @@
 [
     {
-        "id": "6b1fac57d6b54a319883f8c0c83f5438",
-        "name": "SSD",
-        "steps": [
-            {
-                "type": "command",
-                "command": ":m \u26a0\ufe0fWe have decided to conclude our session, please leave the server. Join our communications server for better information, the code is C-A-L-F."
-            },
-            {
-                "type": "wait",
-                "seconds": 60
-            },
-            {
-                "type": "command",
-                "command": ":shutdown"
-            }
-        ],
-        "created_by": "1213915425369227334",
-        "created_at": 1778547366,
-        "updated_at": 1778547366
-    },
-    {
         "id": "c72ed19a9d2c4d368991d72d2b74d59b",
         "name": "no session",
         "steps": [
@@ -32,5 +11,26 @@
         "created_by": "1213915425369227334",
         "created_at": 1778726277,
         "updated_at": 1778726277
+    },
+    {
+        "id": "941784e352a24edc8e955ada4729522e",
+        "name": "SSD",
+        "steps": [
+            {
+                "type": "command",
+                "command": ":m \u26a0\ufe0fWe have decided to conclude our session, please leave the server. Join our communications server for better information, the code is C-A-L-F."
+            },
+            {
+                "type": "wait",
+                "seconds": 15
+            },
+            {
+                "type": "command",
+                "command": ":shutdown"
+            }
+        ],
+        "created_by": "1213915425369227334",
+        "created_at": 1780262665,
+        "updated_at": 1780262665
     }
 ]

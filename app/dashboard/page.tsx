@@ -157,6 +157,25 @@ type EvidenceMediaItem = {
   media_url: string;
   filename?: string;
 };
+type EvidenceRequestSubmission = {
+  id: string;
+  submitter_name: string;
+  description: string;
+  media_items: EvidenceMediaItem[];
+  created_at: number;
+};
+type EvidenceRequest = {
+  id: string;
+  target_user_id?: string;
+  target_username: string;
+  prompt: string;
+  status: "open" | "closed";
+  public_url: string;
+  created_at: number;
+  created_by?: string;
+  submission_count: number;
+  submissions?: EvidenceRequestSubmission[];
+};
 type EvidenceDraftMedia = {
   id: number;
   source: "upload" | "link";
@@ -199,6 +218,7 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   mute: "Timeout Applied Successfully.",
   unmute: "Timeout Removed Successfully.",
   infract: "User Infracted Successfully.",
+  evidence_request_create: "Upload Request Created Successfully.",
   retire: "Staff Member Retired Successfully.",
   reinstate: "Staff Member Reinstated Successfully.",
   erlc_command: "Command Executed Successfully.",
@@ -2008,8 +2028,10 @@ function evidenceVisibilityLabel(visibility: EvidenceVisibility, roles: Role[], 
 
 function EvidenceLogging({ roles }: { roles: Role[] }) {
   const [createdEvidence, setCreatedEvidence] = useState<EvidenceEntry | null>(null);
+  const [createdRequest, setCreatedRequest] = useState<EvidenceRequest | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<EvidenceEntry[] | null>(null);
+  const [requestResults, setRequestResults] = useState<EvidenceRequest[] | null>(null);
   const [searchError, setSearchError] = useState("");
   const [searching, setSearching] = useState(false);
   const [mediaDraft, setMediaDraft] = useState<EvidenceDraftMedia[]>([]);
@@ -2034,9 +2056,9 @@ function EvidenceLogging({ roles }: { roles: Role[] }) {
   const copyEvidenceLink = async (url: string) => {
     try {
       await navigator.clipboard.writeText(url);
-      emitDashboardToast("success", "Evidence link copied.");
+      emitDashboardToast("success", "Link copied.");
     } catch {
-      emitDashboardToast("error", "Unable to copy the evidence link.");
+      emitDashboardToast("error", "Unable to copy the link.");
     }
   };
 
@@ -2165,8 +2187,10 @@ function EvidenceLogging({ roles }: { roles: Role[] }) {
       if (!response.ok) throw new Error(payload?.error || "Unable to search evidence.");
 
       setSearchResults(Array.isArray(payload.evidence) ? payload.evidence : []);
+      setRequestResults(Array.isArray(payload.requests) ? payload.requests : []);
     } catch (err) {
       setSearchResults([]);
+      setRequestResults([]);
       setSearchError(err instanceof Error ? err.message : "Unable to search evidence.");
     } finally {
       setSearching(false);
@@ -2258,76 +2282,169 @@ function EvidenceLogging({ roles }: { roles: Role[] }) {
           <button className="button primary" disabled={!mediaDraft.length}>Save Evidence</button>
         </DashboardPostForm>
 
-        <form className="setting-card form-grid evidence-search-card" onSubmit={searchEvidence}>
-          <div className="panel-title-row">
-            <h2>Lookup Evidence</h2>
-            <Search size={18} />
-          </div>
-          <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Username" />
-          <button className="button primary" disabled={searching || !searchQuery.trim()}>
-            {searching ? <RefreshCw className="spin" size={16} /> : <Search size={16} />}
-            Search
-          </button>
-          {searchError && <div className="theme-alert">{searchError}</div>}
-          {searchResults === null ? (
-            <div className="evidence-empty">Search a username to view matching evidence.</div>
-          ) : (
-            <div className="evidence-results-list">
-              {searchResults.length ? (
-                searchResults.map((item) => {
-                  const mediaItems = evidenceMediaItems(item);
-                  const firstMediaItem = mediaItems[0];
-                  return (
-                    <article className="evidence-result-card" key={item.id}>
-                      <div className="evidence-result-main">
-                        <div className="evidence-result-title">
-                          {firstMediaItem.media_type === "video" ? <FileVideo size={17} /> : <FileImage size={17} />}
-                          <strong>{item.target_username}</strong>
-                          <span className="evidence-badge">{mediaItems.length} item{mediaItems.length === 1 ? "" : "s"}</span>
-                          {item.sensitive && <span className="evidence-badge sensitive">Sensitive</span>}
-                          <span className="evidence-badge">{evidenceVisibilityLabel(item.visibility || "all", roles, item.viewer_role_ids || [])}</span>
-                        </div>
-                        <p>{item.description}</p>
-                        <span>{formatEvidenceDate(item.created_at)}</span>
-                      </div>
-                      <div className="evidence-link-actions">
-                        <button type="button" className="icon-button" aria-label={`Copy evidence ${item.id}`} onClick={() => copyEvidenceLink(item.public_url)}>
-                          <Copy size={16} />
-                        </button>
-                        <a className="icon-button" href={item.public_url} target="_blank" rel="noreferrer" aria-label={`Open evidence ${item.id}`}>
-                          <ExternalLink size={16} />
-                        </a>
-                      </div>
-                    </article>
-                  );
-                })
-              ) : (
-                <div className="evidence-empty">No evidence found for that username.</div>
-              )}
+        <div className="evidence-side-column">
+          <DashboardPostForm
+            action="evidence_request_create"
+            className="setting-card form-grid evidence-request-card"
+            onSuccess={(payload, form) => {
+              if (payload?.evidence_request) setCreatedRequest(payload.evidence_request as EvidenceRequest);
+              form.reset();
+            }}
+          >
+            <div className="panel-title-row">
+              <h2>Request Upload</h2>
+              <LinkIcon size={18} />
             </div>
-          )}
-        </form>
+            <input name="target_username" placeholder="Username" required maxLength={100} />
+            <textarea name="prompt" placeholder="Tell the user what proof to upload" required maxLength={1500} />
+            <button className="button primary">Create Upload Link</button>
+          </DashboardPostForm>
+
+          <form className="setting-card form-grid evidence-search-card" onSubmit={searchEvidence}>
+            <div className="panel-title-row">
+              <h2>Lookup Evidence</h2>
+              <Search size={18} />
+            </div>
+            <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Username" />
+            <button className="button primary" disabled={searching || !searchQuery.trim()}>
+              {searching ? <RefreshCw className="spin" size={16} /> : <Search size={16} />}
+              Search
+            </button>
+            {searchError && <div className="theme-alert">{searchError}</div>}
+            {searchResults === null && requestResults === null ? (
+              <div className="evidence-empty">Search a username to view saved evidence and upload responses.</div>
+            ) : (
+              <div className="evidence-results-list">
+                {requestResults?.length ? requestResults.map((request) => (
+                  <article className="evidence-result-card" key={`request-${request.id}`}>
+                    <div className="evidence-result-main">
+                      <div className="evidence-result-title">
+                        <LinkIcon size={17} />
+                        <strong>{request.target_username}</strong>
+                        <span className="evidence-badge">Request</span>
+                        <span className="evidence-badge">{request.submission_count} submission{request.submission_count === 1 ? "" : "s"}</span>
+                        <span className="evidence-badge">{request.status}</span>
+                      </div>
+                      <p>{request.prompt}</p>
+                      <span>{formatEvidenceDate(request.created_at)}</span>
+                      {request.submissions?.length ? (
+                        <div className="evidence-submission-list">
+                          {request.submissions.map((submission) => {
+                            const firstMediaItem = submission.media_items[0];
+                            return (
+                              <article className="evidence-submission-card" key={submission.id}>
+                                <div className="evidence-result-title">
+                                  {firstMediaItem?.media_type === "video" ? <FileVideo size={16} /> : <FileImage size={16} />}
+                                  <strong>{submission.submitter_name}</strong>
+                                  <span className="evidence-badge">{submission.media_items.length} item{submission.media_items.length === 1 ? "" : "s"}</span>
+                                </div>
+                                {submission.description && <p>{submission.description}</p>}
+                                <span>{formatEvidenceDate(submission.created_at)}</span>
+                                <div className="evidence-submission-media">
+                                  {submission.media_items.map((item, index) => (
+                                    <a key={`${submission.id}-${index}`} className="evidence-submission-chip" href={item.media_url} target="_blank" rel="noreferrer">
+                                      {item.media_type === "video" ? <FileVideo size={14} /> : <FileImage size={14} />}
+                                      <span>Open {index + 1}</span>
+                                    </a>
+                                  ))}
+                                </div>
+                              </article>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="evidence-empty">No user submissions yet.</div>
+                      )}
+                    </div>
+                    <div className="evidence-link-actions">
+                      <button type="button" className="icon-button" aria-label={`Copy request ${request.id}`} onClick={() => copyEvidenceLink(request.public_url)}>
+                        <Copy size={16} />
+                      </button>
+                      <a className="icon-button" href={request.public_url} target="_blank" rel="noreferrer" aria-label={`Open request ${request.id}`}>
+                        <ExternalLink size={16} />
+                      </a>
+                    </div>
+                  </article>
+                )) : null}
+                {searchResults?.length ? (
+                  searchResults.map((item) => {
+                    const mediaItems = evidenceMediaItems(item);
+                    const firstMediaItem = mediaItems[0];
+                    return (
+                      <article className="evidence-result-card" key={item.id}>
+                        <div className="evidence-result-main">
+                          <div className="evidence-result-title">
+                            {firstMediaItem.media_type === "video" ? <FileVideo size={17} /> : <FileImage size={17} />}
+                            <strong>{item.target_username}</strong>
+                            <span className="evidence-badge">{mediaItems.length} item{mediaItems.length === 1 ? "" : "s"}</span>
+                            {item.sensitive && <span className="evidence-badge sensitive">Sensitive</span>}
+                            <span className="evidence-badge">{evidenceVisibilityLabel(item.visibility || "all", roles, item.viewer_role_ids || [])}</span>
+                          </div>
+                          <p>{item.description}</p>
+                          <span>{formatEvidenceDate(item.created_at)}</span>
+                        </div>
+                        <div className="evidence-link-actions">
+                          <button type="button" className="icon-button" aria-label={`Copy evidence ${item.id}`} onClick={() => copyEvidenceLink(item.public_url)}>
+                            <Copy size={16} />
+                          </button>
+                          <a className="icon-button" href={item.public_url} target="_blank" rel="noreferrer" aria-label={`Open evidence ${item.id}`}>
+                            <ExternalLink size={16} />
+                          </a>
+                        </div>
+                      </article>
+                    );
+                  })
+                ) : null}
+                {!requestResults?.length && !searchResults?.length && <div className="evidence-empty">No evidence or upload requests found for that username.</div>}
+              </div>
+            )}
+          </form>
+        </div>
       </div>
 
-      {createdEvidence && (
-        <article className="setting-card evidence-created-card">
-          <div>
-            <h2>Evidence Saved</h2>
-            <p>{createdEvidence.target_username}</p>
-          </div>
-          <div className="copy-field">
-            <input readOnly value={createdEvidence.public_url} aria-label="Evidence short link" />
-            <button type="button" className="button ghost" onClick={() => copyEvidenceLink(createdEvidence.public_url)}>
-              <Copy size={16} />
-              Copy
-            </button>
-            <a className="button ghost" href={createdEvidence.public_url} target="_blank" rel="noreferrer">
-              <ExternalLink size={16} />
-              Open
-            </a>
-          </div>
-          <p>Visibility: {evidenceVisibilityLabel(createdEvidence.visibility || "all", roles, createdEvidence.viewer_role_ids || [])}</p>
-        </article>
+      {(createdEvidence || createdRequest) && (
+        <div className="two-col">
+          {createdEvidence && (
+            <article className="setting-card evidence-created-card">
+              <div>
+                <h2>Evidence Saved</h2>
+                <p>{createdEvidence.target_username}</p>
+              </div>
+              <div className="copy-field">
+                <input readOnly value={createdEvidence.public_url} aria-label="Evidence short link" />
+                <button type="button" className="button ghost" onClick={() => copyEvidenceLink(createdEvidence.public_url)}>
+                  <Copy size={16} />
+                  Copy
+                </button>
+                <a className="button ghost" href={createdEvidence.public_url} target="_blank" rel="noreferrer">
+                  <ExternalLink size={16} />
+                  Open
+                </a>
+              </div>
+              <p>Visibility: {evidenceVisibilityLabel(createdEvidence.visibility || "all", roles, createdEvidence.viewer_role_ids || [])}</p>
+            </article>
+          )}
+          {createdRequest && (
+            <article className="setting-card evidence-created-card">
+              <div>
+                <h2>Upload Link Created</h2>
+                <p>{createdRequest.target_username}</p>
+              </div>
+              <div className="copy-field">
+                <input readOnly value={createdRequest.public_url} aria-label="Evidence upload request link" />
+                <button type="button" className="button ghost" onClick={() => copyEvidenceLink(createdRequest.public_url)}>
+                  <Copy size={16} />
+                  Copy
+                </button>
+                <a className="button ghost" href={createdRequest.public_url} target="_blank" rel="noreferrer">
+                  <ExternalLink size={16} />
+                  Open
+                </a>
+              </div>
+              <p>{createdRequest.submission_count} submission{createdRequest.submission_count === 1 ? "" : "s"} so far.</p>
+            </article>
+          )}
+        </div>
       )}
     </section>
   );
@@ -2660,7 +2777,7 @@ function BotUpdates({ channels }: { channels: Channel[] }) {
 
 function BotSettings({ data }: { data: DashboardData }) {
   return (
-    <Panel title="Basic Settings" index={["Staff Roles", "Channels", "Feedback", "Rank Roles", "Permission Checks"]}>
+    <Panel title="Basic Settings" index={["Staff Roles", "Channels", "Automation", "Feedback", "Rank Roles", "Permission Checks"]}>
       <DashboardPostForm action="settings_save" className="settings-form">
         <article className="setting-card">
           <h2>Staff Roles</h2>
@@ -2701,7 +2818,11 @@ function BotSettings({ data }: { data: DashboardData }) {
         </article>
 
         <article className="setting-card">
-          <h2>Feedback</h2>
+          <h2>Automation & Feedback</h2>
+          <label className="switch-line">
+            <input type="checkbox" name="discord_checks_enabled" defaultChecked={data.settings.discord_checks_enabled !== false} />
+            <span>Discord checks enabled</span>
+          </label>
           <label className="switch-line">
             <input type="checkbox" name="feedback_enabled" defaultChecked={Boolean(data.settings.feedback_enabled)} />
             <span>Feedback enabled</span>

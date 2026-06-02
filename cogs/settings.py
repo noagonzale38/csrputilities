@@ -3,13 +3,28 @@ from discord.ext import commands
 from discord import app_commands
 import json
 import copy
+from pathlib import Path
 
 from cogs.helpers import (
     BLANK_COLOR, CSRP_ICON, CHECK, CROSS,
     brand_footer, success_embed, error_embed,
 )
 
-SETTINGS_FILE = "guild_settings.json"
+SETTINGS_FILE = Path(__file__).resolve().parent.parent / "guild_settings.json"
+SETTINGS_ALLOWED_MENTIONS = discord.AllowedMentions.none()
+
+
+def _display_role(guild: discord.Guild, role_id: int | None) -> str:
+    if not role_id:
+        return "`Not set`"
+    role = guild.get_role(int(role_id))
+    return role.mention if role else f"`Deleted role ({role_id})`"
+
+
+def _display_role_list(guild: discord.Guild, role_ids: list[int]) -> str:
+    if not role_ids:
+        return "`Not set`"
+    return ", ".join(_display_role(guild, role_id) for role_id in role_ids)
 
 DEFAULT_PERMISSION_ROLE_SETTINGS = {
     "moderation": [
@@ -47,6 +62,13 @@ DEFAULT_PERMISSION_ROLE_SETTINGS = {
 }
 
 DEFAULT_PERMISSION_USER_SETTINGS = {
+    "moderation": [],
+    "noah_or_directive": [],
+    "sales_authorized": [],
+    "bot_dev": [],
+    "training_instructor": [],
+    "role_authorized": [],
+    "session_permitted": [],
     "authorized": [
         1213915425369227334,
         1218053009834246156,
@@ -69,6 +91,7 @@ DEFAULT_PERMISSION_USER_SETTINGS = {
         1224798895129890957,
         654110914311618561,
     ],
+    "bot_staff": [],
 }
 
 PERMISSION_ROLE_LABELS = {
@@ -84,13 +107,22 @@ PERMISSION_ROLE_LABELS = {
 }
 
 PERMISSION_USER_LABELS = {
+    "moderation": "Moderation Users",
+    "noah_or_directive": "Noah / Directive Users",
+    "sales_authorized": "Sales Users",
+    "bot_dev": "Bot Developer Users",
+    "training_instructor": "Training Instructor Users",
+    "role_authorized": "Authorized Role Bypass Users",
+    "session_permitted": "Session Permitted Users",
     "authorized": "Authorized Users",
     "support": "Support Users",
+    "bot_staff": "Bot Staff Users",
 }
 
 DEFAULT_SETTINGS = {
     "staff_roles": [],
     "retirement_log_channel": None,
+    "discord_checks_enabled": True,
     "feedback_enabled": False,
     "feedback_questions": ["Why did you decide to leave?"],
     "staff_feedback_channel": None,
@@ -230,25 +262,59 @@ def member_has_permission(member: discord.Member, *, role_keys: list[str] | None
     return False
 
 
+def get_member_highest_rank(member: discord.Member) -> str | None:
+    settings = get_guild_settings(member.guild.id)
+    role_to_rank = {
+        int(role_id): rank
+        for rank, role_id in settings.get("rank_roles", {}).items()
+        if role_id is not None
+    }
+
+    highest_rank = None
+    highest_rank_index = len(RANK_ORDER)
+    for role in member.roles:
+        rank = role_to_rank.get(role.id)
+        if rank is None:
+            continue
+        idx = RANK_ORDER.index(rank)
+        if idx < highest_rank_index:
+            highest_rank = rank
+            highest_rank_index = idx
+
+    return highest_rank
+
+
+def member_has_rank_or_higher(member: discord.Member, minimum_rank: str) -> bool:
+    if minimum_rank not in RANK_ORDER:
+        return False
+
+    highest_rank = get_member_highest_rank(member)
+    if highest_rank not in RANK_ORDER:
+        return False
+
+    return RANK_ORDER.index(highest_rank) <= RANK_ORDER.index(minimum_rank)
+
+
 def dashboard_embed(guild: discord.Guild) -> discord.Embed:
     settings = get_guild_settings(guild.id)
 
-    staff = ", ".join(f"<@&{r}>" for r in settings.get("staff_roles", [])) or "`Not set`"
+    staff = _display_role_list(guild, settings.get("staff_roles", []))
     log_ch = f"<#{settings['retirement_log_channel']}>" if settings.get("retirement_log_channel") else "`Not set`"
     fb_ch = f"<#{settings['staff_feedback_channel']}>" if settings.get("staff_feedback_channel") else "`Not set`"
     partner_log_ch = f"<#{settings['partnership_log_channel']}>" if settings.get("partnership_log_channel") else "`Not set`"
+    discord_checks_on = f"{CHECK} Enabled" if settings.get("discord_checks_enabled", True) else f"{CROSS} Disabled"
     fb_on = f"{CHECK} Enabled" if settings.get("feedback_enabled") else f"{CROSS} Disabled"
     questions = settings.get("feedback_questions", [])
     q_text = "\n".join(f"> `{i + 1}.` {q}" for i, q in enumerate(questions)) or "> None"
-    partner = ", ".join(f"<@&{r}>" for r in settings.get("partnership_allowed_roles", [])) or "`Not set`"
-    embed_roles = ", ".join(f"<@&{r}>" for r in settings.get("embed_allowed_roles", [])) or "`Not set`"
-    retire = ", ".join(f"<@&{r}>" for r in settings.get("retire_allowed_roles", [])) or "`Not set`"
+    partner = _display_role_list(guild, settings.get("partnership_allowed_roles", []))
+    embed_roles = _display_role_list(guild, settings.get("embed_allowed_roles", []))
+    retire = _display_role_list(guild, settings.get("retire_allowed_roles", []))
 
     rank_roles = settings.get("rank_roles", {})
     rank_lines = []
     for rank in RANK_ORDER:
         rid = rank_roles.get(rank)
-        rank_lines.append(f"> **{rank}:** " + (f"<@&{rid}>" if rid else "`Not set`"))
+        rank_lines.append(f"> **{rank}:** {_display_role(guild, rid)}")
     rank_text = "\n".join(rank_lines)
 
     desc = (
@@ -256,6 +322,7 @@ def dashboard_embed(guild: discord.Guild) -> discord.Embed:
         f"**Retirement Log Channel:** {log_ch}\n"
         f"**Staff Feedback Channel:** {fb_ch}\n"
         f"**Partnership Log Channel:** {partner_log_ch}\n\n"
+        f"**Discord Checks:** {discord_checks_on}\n"
         f"**Leave Feedback:** {fb_on}\n"
         f"**Questions:**\n{q_text}\n\n"
         f"**Partnership Permissions:** {partner}\n"
@@ -269,6 +336,30 @@ def dashboard_embed(guild: discord.Guild) -> discord.Embed:
     embed.set_author(name="CSRP Utilities", icon_url=CSRP_ICON)
     brand_footer(embed)
     return embed
+
+
+async def send_settings_dashboard(destination, guild: discord.Guild, view: discord.ui.View):
+    await destination.send(
+        embed=dashboard_embed(guild),
+        view=view,
+        allowed_mentions=SETTINGS_ALLOWED_MENTIONS,
+    )
+
+
+async def edit_settings_dashboard(response, guild: discord.Guild, view: discord.ui.View):
+    await response.edit_message(
+        embed=dashboard_embed(guild),
+        view=view,
+        allowed_mentions=SETTINGS_ALLOWED_MENTIONS,
+    )
+
+
+async def refresh_settings_dashboard(message: discord.Message, guild: discord.Guild, view: discord.ui.View):
+    await message.edit(
+        embed=dashboard_embed(guild),
+        view=view,
+        allowed_mentions=SETTINGS_ALLOWED_MENTIONS,
+    )
 
 
 class DashboardView(discord.ui.View):
@@ -290,6 +381,7 @@ class DashboardView(discord.ui.View):
             discord.SelectOption(label="Retirement Log Channel", value="retirement_log_channel", description="Where retirement/reinstatement logs go"),
             discord.SelectOption(label="Staff Feedback Channel", value="staff_feedback_channel", description="Where staff feedback is posted"),
             discord.SelectOption(label="Partnership Log Channel", value="partnership_log_channel", description="Where partnership activity is logged"),
+            discord.SelectOption(label="Discord Checks Toggle", value="discord_checks_enabled", description="Toggle the automated Discord check loop"),
             discord.SelectOption(label="Leave Feedback Toggle", value="feedback_enabled", description="Toggle leave feedback DMs"),
             discord.SelectOption(label="Leave Feedback Questions", value="feedback_questions", description="Edit the leave feedback questions"),
             discord.SelectOption(label="Partnership Permissions", value="partnership_allowed_roles", description="Who can use /partnership"),
@@ -331,14 +423,21 @@ class DashboardView(discord.ui.View):
             brand_footer(embed)
             await interaction.response.edit_message(embed=embed, view=view)
 
-        elif choice == "feedback_enabled":
+        elif choice in ("feedback_enabled", "discord_checks_enabled"):
             settings = get_guild_settings(self.guild.id)
-            current = settings.get("feedback_enabled", False)
-            view = ToggleView(self.guild, self.author)
+            toggle_key = choice
+            current = settings.get(toggle_key, False if toggle_key == "feedback_enabled" else True)
+            view = ToggleView(self.guild, self.author, toggle_key)
             status = f"{CHECK} Enabled" if current else f"{CROSS} Disabled"
+            title = "Configure: Leave Feedback" if toggle_key == "feedback_enabled" else "Configure: Discord Checks"
+            description = (
+                f"Currently: **{status}**\n\nWhen enabled, users who leave the server will be DMed feedback questions."
+                if toggle_key == "feedback_enabled"
+                else f"Currently: **{status}**\n\nWhen enabled, the automated Discord check loop will continue running for this server."
+            )
             embed = discord.Embed(
-                title="Configure: Leave Feedback",
-                description=f"Currently: **{status}**\n\nWhen enabled, users who leave the server will be DMed feedback questions.",
+                title=title,
+                description=description,
                 color=BLANK_COLOR,
             )
             brand_footer(embed)
@@ -427,7 +526,7 @@ class PermissionConfigMenuView(discord.ui.View):
     @discord.ui.button(label="Back to Settings", style=discord.ButtonStyle.secondary, row=2)
     async def back_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = DashboardView(self.guild, self.author)
-        await interaction.response.edit_message(embed=dashboard_embed(self.guild), view=view)
+        await edit_settings_dashboard(interaction.response, self.guild, view)
 
 
 class PermissionRoleConfigView(discord.ui.View):
@@ -576,12 +675,12 @@ class RoleConfigView(discord.ui.View):
             return
         update_guild_setting(self.guild.id, self.setting_key, self.selected_roles)
         view = DashboardView(self.guild, self.author)
-        await interaction.response.edit_message(embed=dashboard_embed(self.guild), view=view)
+        await edit_settings_dashboard(interaction.response, self.guild, view)
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, row=2)
     async def back_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = DashboardView(self.guild, self.author)
-        await interaction.response.edit_message(embed=dashboard_embed(self.guild), view=view)
+        await edit_settings_dashboard(interaction.response, self.guild, view)
 
 
 class ChannelConfigView(discord.ui.View):
@@ -611,19 +710,20 @@ class ChannelConfigView(discord.ui.View):
             return
         update_guild_setting(self.guild.id, self.setting_key, self.selected_channel)
         view = DashboardView(self.guild, self.author)
-        await interaction.response.edit_message(embed=dashboard_embed(self.guild), view=view)
+        await edit_settings_dashboard(interaction.response, self.guild, view)
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, row=2)
     async def back_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = DashboardView(self.guild, self.author)
-        await interaction.response.edit_message(embed=dashboard_embed(self.guild), view=view)
+        await edit_settings_dashboard(interaction.response, self.guild, view)
 
 
 class ToggleView(discord.ui.View):
-    def __init__(self, guild, author):
+    def __init__(self, guild, author, setting_key):
         super().__init__(timeout=120)
         self.guild = guild
         self.author = author
+        self.setting_key = setting_key
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author.id:
@@ -633,20 +733,20 @@ class ToggleView(discord.ui.View):
 
     @discord.ui.button(label="Enable", style=discord.ButtonStyle.green)
     async def enable_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        update_guild_setting(self.guild.id, "feedback_enabled", True)
+        update_guild_setting(self.guild.id, self.setting_key, True)
         view = DashboardView(self.guild, self.author)
-        await interaction.response.edit_message(embed=dashboard_embed(self.guild), view=view)
+        await edit_settings_dashboard(interaction.response, self.guild, view)
 
     @discord.ui.button(label="Disable", style=discord.ButtonStyle.danger)
     async def disable_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        update_guild_setting(self.guild.id, "feedback_enabled", False)
+        update_guild_setting(self.guild.id, self.setting_key, False)
         view = DashboardView(self.guild, self.author)
-        await interaction.response.edit_message(embed=dashboard_embed(self.guild), view=view)
+        await edit_settings_dashboard(interaction.response, self.guild, view)
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
     async def back_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = DashboardView(self.guild, self.author)
-        await interaction.response.edit_message(embed=dashboard_embed(self.guild), view=view)
+        await edit_settings_dashboard(interaction.response, self.guild, view)
 
 
 class QuestionsModal(discord.ui.Modal, title="Edit Feedback Questions"):
@@ -671,7 +771,7 @@ class QuestionsModal(discord.ui.Modal, title="Edit Feedback Questions"):
         update_guild_setting(self.guild.id, "feedback_questions", questions)
         await interaction.response.defer()
         view = DashboardView(self.guild, self.author)
-        await self.original_message.edit(embed=dashboard_embed(self.guild), view=view)
+        await refresh_settings_dashboard(self.original_message, self.guild, view)
 
 
 class QuestionsView(discord.ui.View):
@@ -696,7 +796,7 @@ class QuestionsView(discord.ui.View):
     @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
     async def back_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = DashboardView(self.guild, self.author)
-        await interaction.response.edit_message(embed=dashboard_embed(self.guild), view=view)
+        await edit_settings_dashboard(interaction.response, self.guild, view)
 
 
 class RankRolesMenuView(discord.ui.View):
@@ -717,7 +817,7 @@ class RankRolesMenuView(discord.ui.View):
         lines = []
         for rank in RANK_ORDER:
             rid = rank_roles.get(rank)
-            lines.append(f"> **{rank}:** " + (f"<@&{rid}>" if rid else "`Not set`"))
+            lines.append(f"> **{rank}:** {_display_role(self.guild, rid)}")
         embed = discord.Embed(
             title="Configure: Rank Roles",
             description="Select a rank below to assign its Discord role.\n\n" + "\n".join(lines),
@@ -744,7 +844,7 @@ class RankRolesMenuView(discord.ui.View):
     @discord.ui.button(label="Back to Settings", style=discord.ButtonStyle.secondary, row=2)
     async def back_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = DashboardView(self.guild, self.author)
-        await interaction.response.edit_message(embed=dashboard_embed(self.guild), view=view)
+        await edit_settings_dashboard(interaction.response, self.guild, view)
 
 
 class SingleRankRoleView(discord.ui.View):
@@ -815,12 +915,13 @@ class Settings(commands.Cog):
                 "> `2.` **Retirement Log Channel** — where retirement/reinstatement logs go\n"
                 "> `3.` **Staff Feedback Channel** — where staff feedback is posted\n"
                 "> `4.` **Partnership Log Channel** - where partnership activity is logged\n"
-                "> `5.` **Leave Feedback** — toggle & questions for leave DMs\n"
-                "> `6.` **Partnership Permissions** — who can use /partnership\n"
-                "> `7.` **Embed Creation Permissions** — who can use /embed create\n"
-                "> `8.` **Retire/Reinstate/Demote Permissions** — who can use /retire, /reinstate, and /demote\n"
-                "> `9.` **Rank Roles** — map rank names to Discord roles\n"
-                "> `10.` **Permission Checks** — replace hardcoded command access rules\n"
+                "> `5.` **Discord Checks** — toggle the automated Discord check loop\n"
+                "> `6.` **Leave Feedback** — toggle & questions for leave DMs\n"
+                "> `7.` **Partnership Permissions** — who can use /partnership\n"
+                "> `8.` **Embed Creation Permissions** — who can use /embed create\n"
+                "> `9.` **Retire/Reinstate/Demote Permissions** — who can use /retire, /reinstate, and /demote\n"
+                "> `10.` **Rank Roles** — map rank names to Discord roles\n"
+                "> `11.` **Permission Checks** — replace hardcoded command access rules\n"
             ),
             color=BLANK_COLOR,
         )
@@ -833,7 +934,7 @@ class Settings(commands.Cog):
     @app_commands.default_permissions(manage_guild=True)
     async def settings_cmd(self, ctx: commands.Context):
         view = DashboardView(ctx.guild, ctx.author)
-        await ctx.send(embed=dashboard_embed(ctx.guild), view=view)
+        await send_settings_dashboard(ctx, ctx.guild, view)
 
 
 async def setup(bot):

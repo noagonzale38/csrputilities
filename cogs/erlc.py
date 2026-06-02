@@ -9,11 +9,22 @@ from config import (
 from cogs.helpers import (
     Colors, BLANK_COLOR, CHECK, CROSS, CSRP_ICON,
     success_embed, error_embed, info_embed, brand_footer, embed_description,
-    api_get, api_post, PaginatorView,
+    api_get, api_post, PaginatorView, user_tag,
 )
 
 PRC_API = "https://api.erlc.gg/v1"
 PRC_HEADERS = {"Content-Type": "application/json", "Server-Key": SERVER_KEY}
+PRC_SERVER_OFFLINE_STATUSES = {288, 422, 3002}
+
+
+def _prc_status_message(status: int, *, action: str = "complete this action") -> tuple[str, str]:
+    if status == 429:
+        return "Rate Limited", "CSRP has exceeded its rate limit. Please try again shortly."
+    if status in PRC_SERVER_OFFLINE_STATUSES:
+        return "Server Offline", "The ERLC server is shut down or unavailable right now."
+    if status == 500:
+        return "API Error", "The PRC API returned a 500 error. Please try again."
+    return "Unexpected Error", f"The PRC API returned an unexpected error. Status: `{status}`"
 
 
 class ERLC(commands.Cog):
@@ -83,7 +94,7 @@ class ERLC(commands.Cog):
                     title="Command Executed",
                     description=(
                         f"> **Command:** `{command}`\n"
-                        f"> **Executed By:** {ctx.author.mention}\n"
+                        f"> **Executed By:** {user_tag(ctx.author)}\n"
                         f"> **Status:** Sent successfully"
                     ),
                     color=BLANK_COLOR,
@@ -91,14 +102,9 @@ class ERLC(commands.Cog):
                 embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else "")
                 brand_footer(embed)
                 await ctx.send(embed=embed)
-            elif status == 429:
-                await ctx.send(embed=error_embed("Rate Limited", "CSRP has exceeded its rate limit. Please try again shortly."))
-            elif status == 422:
-                await ctx.send(embed=error_embed("Server Offline", "The in-game server is currently shut down."))
-            elif status == 500:
-                await ctx.send(embed=error_embed("API Error", "The PRC API returned a 500 error. Please try again."))
             else:
-                await ctx.send(embed=error_embed("Unexpected Error", f"The PRC API returned an unexpected error. Status: `{status}`"))
+                title, message = _prc_status_message(status, action="send this command")
+                await ctx.send(embed=error_embed(title, message))
 
         except Exception as e:
             await ctx.send(embed=error_embed("Connection Error", f"Error connecting to the server: `{e}`"))
@@ -108,14 +114,15 @@ class ERLC(commands.Cog):
         await ctx.defer()
         try:
             status, players_data = await api_get(f"{PRC_API}/server/players", headers={"Server-Key": SERVER_KEY})
-            if status != 200 or not players_data:
-                await ctx.send(embed=error_embed("Fetch Failed", "Failed to fetch players. Please try again later."))
+            if status != 200:
+                title, message = _prc_status_message(status, action="fetch players")
+                await ctx.send(embed=error_embed(title, message))
+                return
+            if not players_data:
+                await ctx.send(embed=info_embed("No Players Online", "No players are currently online."))
                 return
 
             current_players = len(players_data)
-            if current_players == 0:
-                await ctx.send(embed=info_embed("No Players Online", "No players are currently online."))
-                return
 
             categories = {"Server Administrator": [], "Server Moderator": [], "Normal": []}
             for player in players_data:
@@ -149,8 +156,12 @@ class ERLC(commands.Cog):
         await ctx.defer()
         try:
             status, data = await api_get(f"{PRC_API}/server", headers={"Server-Key": SERVER_KEY})
-            if status != 200 or not data:
-                await ctx.send(embed=error_embed("Fetch Failed", f"Failed to fetch server info. Status: `{status}`"))
+            if status != 200:
+                title, message = _prc_status_message(status, action="fetch server info")
+                await ctx.send(embed=error_embed(title, message))
+                return
+            if not data:
+                await ctx.send(embed=error_embed("Fetch Failed", "Failed to fetch server info."))
                 return
 
             embed = discord.Embed(
@@ -182,7 +193,8 @@ class ERLC(commands.Cog):
             if status == 200:
                 await ctx.send(embed=success_embed("Hint Sent", "Hint sent successfully to the server."))
             else:
-                await ctx.send(embed=error_embed("Hint Failed", f"An error occurred. Status Code: `{status}`"))
+                title, error_message = _prc_status_message(status, action="send this hint")
+                await ctx.send(embed=error_embed(title if status in PRC_SERVER_OFFLINE_STATUSES else "Hint Failed", error_message))
         except Exception as e:
             await ctx.send(embed=error_embed("Connection Error", f"Error connecting to the server: `{e}`"))
 
@@ -196,7 +208,8 @@ class ERLC(commands.Cog):
             if status == 200:
                 await ctx.send(embed=success_embed("Message Sent", "Message sent successfully to the server."))
             else:
-                await ctx.send(embed=error_embed("Message Failed", f"An error occurred. Status Code: `{status}`"))
+                title, error_message = _prc_status_message(status, action="send this message")
+                await ctx.send(embed=error_embed(title if status in PRC_SERVER_OFFLINE_STATUSES else "Message Failed", error_message))
         except Exception as e:
             await ctx.send(embed=error_embed("Connection Error", f"Error connecting to the server: `{e}`"))
 
@@ -212,7 +225,7 @@ class ERLC(commands.Cog):
                     title="Player Kicked",
                     description=(
                         f"> **Player:** `{player}`\n"
-                        f"> **Moderator:** {ctx.author.mention}\n"
+                        f"> **Moderator:** {user_tag(ctx.author)}\n"
                         f"> **Reason:** {reason}"
                     ),
                     color=BLANK_COLOR,
@@ -220,10 +233,9 @@ class ERLC(commands.Cog):
                 embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else "")
                 brand_footer(embed)
                 await ctx.send(embed=embed)
-            elif status == 422:
-                await ctx.send(embed=error_embed("Server Offline", "The in-game server is currently shut down."))
             else:
-                await ctx.send(embed=error_embed("Kick Failed", f"An error occurred. Status Code: `{status}`"))
+                title, error_message = _prc_status_message(status, action="kick this player")
+                await ctx.send(embed=error_embed(title if status in PRC_SERVER_OFFLINE_STATUSES else "Kick Failed", error_message))
         except Exception as e:
             await ctx.send(embed=error_embed("Connection Error", f"Error connecting to the server: `{e}`"))
 
@@ -244,7 +256,7 @@ class ERLC(commands.Cog):
                     title="Player Banned",
                     description=(
                         f"> **Player:** `{player}`\n"
-                        f"> **Moderator:** {ctx.author.mention}\n"
+                        f"> **Moderator:** {user_tag(ctx.author)}\n"
                         f"> **Reason:** {reason}"
                     ),
                     color=BLANK_COLOR,
@@ -252,10 +264,9 @@ class ERLC(commands.Cog):
                 embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else "")
                 brand_footer(embed)
                 await ctx.send(embed=embed)
-            elif status == 422:
-                await ctx.send(embed=error_embed("Server Offline", "The in-game server is currently shut down."))
             else:
-                await ctx.send(embed=error_embed("Ban Failed", f"An error occurred. Status Code: `{status}`"))
+                title, error_message = _prc_status_message(status, action="ban this player")
+                await ctx.send(embed=error_embed(title if status in PRC_SERVER_OFFLINE_STATUSES else "Ban Failed", error_message))
         except Exception as e:
             await ctx.send(embed=error_embed("Connection Error", f"Error connecting to the server: `{e}`"))
 
@@ -268,13 +279,16 @@ class ERLC(commands.Cog):
                 await ctx.send(embed=error_embed("No Modcalls", "No modcall logs found."))
                 return
 
+            if isinstance(data, list):
+                data = sorted(data, key=lambda entry: int(entry.get("Timestamp") or 0), reverse=True)
+
             per_page = 5
             pages = []
             for i in range(0, len(data), per_page):
                 chunk = data[i:i + per_page]
                 desc = "\n\n".join(
                     f"> **Caller:** {mc.get('Caller', 'Unknown')}\n"
-                    f"> **Moderator:** {mc.get('Moderator', 'Unknown')}\n"
+                    f"> **Moderator:** {mc.get('Moderator', 'None')}\n"
                     f"> **Time:** <t:{mc.get('Timestamp', 0)}:F>"
                     for mc in chunk
                 )
