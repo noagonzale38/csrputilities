@@ -66,7 +66,7 @@ from dashboard_themes import create_theme, install_theme, list_public_themes, li
 
 LOG_FILE = "logs.txt"
 API_KEYS_FILE = "APIKeys.txt"
-INTERNAL_API_KEY = "Yj1g5xkNssijLNLQrFCJfXhWdvUGOQCZNrrmiZnBoOk0XZ8o7I1wnhZC45ZoZLG2"
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY")
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = os.getenv("DASHBOARD_SECRET_KEY", "change-me-dashboard-secret")
