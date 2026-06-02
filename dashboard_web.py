@@ -282,7 +282,8 @@ def authenticate():
 
 
 def internal_authenticate():
-    return extract_auth_token() == INTERNAL_API_KEY
+    token = extract_auth_token()
+    return bool(INTERNAL_API_KEY) and bool(token) and token == INTERNAL_API_KEY
 
 
 def _discord_redirect_uri():
