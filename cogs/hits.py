@@ -244,7 +244,7 @@ class StaffHostageRequestModal(discord.ui.Modal, title="Manual Hostage Request")
         )
 
 
-async def ensure_hostage_sticky_message(channel: discord.abc.MessageableChannel) -> None:
+async def ensure_hostage_sticky_message(channel: discord.TextChannel) -> None:
     guild = getattr(channel, "guild", None)
     if guild is None:
         return
@@ -260,7 +260,7 @@ async def ensure_hostage_sticky_message(channel: discord.abc.MessageableChannel)
     update_guild_setting(guild.id, "hostage_sticky_message_id", message.id)
 
 
-async def refresh_hostage_sticky_message(channel: discord.abc.MessageableChannel) -> None:
+async def refresh_hostage_sticky_message(channel: discord.TextChannel) -> None:
     guild = getattr(channel, "guild", None)
     if guild is None:
         return
