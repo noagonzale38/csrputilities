@@ -70,15 +70,16 @@ def _build_hostage_request_embed(
     guild: discord.Guild,
     requester: discord.abc.User,
     members: int,
-    hostage: str,
+    hostage: str | None,
     duration: str,
     *,
     hostage_taker: str | None = None,
 ) -> discord.Embed:
+    hostage_display = hostage or "No user provided"
     description = (
         f"> **Requested By:** {requester.mention}\n"
         f"> **Members Involved:** `{members}`\n"
-        f"> **Hostage:** `{hostage}`\n"
+        f"> **Hostage:** `{hostage_display}`\n"
     )
     if hostage_taker:
         description += f"> **Hostage Taker:** `{hostage_taker}`\n"
@@ -95,16 +96,17 @@ def _build_hostage_request_embed(
 def _build_hostage_accepted_embed(
     requester: discord.abc.User,
     members: int,
-    hostage: str,
+    hostage: str | None,
     duration: str,
     accepted_by: discord.abc.User,
     *,
     hostage_taker: str | None = None,
 ) -> discord.Embed:
+    hostage_display = hostage or "No user provided"
     description = (
         f"> **Requested By:** {requester.mention}\n"
         f"> **Members Involved:** `{members}`\n"
-        f"> **Hostage:** `{hostage}`\n"
+        f"> **Hostage:** `{hostage_display}`\n"
     )
     if hostage_taker:
         description += f"> **Hostage Taker:** `{hostage_taker}`\n"
@@ -163,7 +165,7 @@ class StaffHostageRequestModal(discord.ui.Modal, title="Manual Hostage Request")
     hostage = ui.TextInput(
         label="Hostage Username",
         placeholder="Enter ROBLOX username",
-        required=True,
+        required=False,
         max_length=32,
     )
     duration = ui.TextInput(
@@ -196,11 +198,13 @@ class StaffHostageRequestModal(discord.ui.Modal, title="Manual Hostage Request")
             )
             return
 
-        hostage_value = self.hostage.value.strip()
+        hostage_value = self.hostage.value.strip() or None
         hostage_taker_value = self.hostage_taker.value.strip()
         duration_value = self.duration.value.strip()
 
         for label, value in (("Hostage", hostage_value), ("Hostage Taker", hostage_taker_value)):
+            if not value:
+                continue
             try:
                 float(value)
                 await interaction.response.send_message(
@@ -455,12 +459,13 @@ class DenyHostageModal(discord.ui.Modal, title="Deny Hostage Scene"):
         self.review_message = review_message
 
     async def on_submit(self, interaction: discord.Interaction):
+        hostage_display = self.parent_view.hostage or "No user provided"
         embed = discord.Embed(
             title="Hostage Scene Denied",
             description=(
                 f"> **Requested By:** {self.parent_view.ctx.author.mention}\n"
                 f"> **Members Involved:** `{self.parent_view.members}`\n"
-                f"> **Hostage:** `{self.parent_view.hostage}`\n"
+                f"> **Hostage:** `{hostage_display}`\n"
                 f"> **Duration:** `{self.parent_view.duration}`\n"
                 f"> **Denied By:** {interaction.user.mention}\n"
                 f"> **Denial Reason:** {self.reason.value}"
@@ -479,7 +484,7 @@ class DenyHostageModal(discord.ui.Modal, title="Deny Hostage Scene"):
                 title="Hostage Scene Denied",
                 description=(
                     f"> **Members Involved:** `{self.parent_view.members}`\n"
-                    f"> **Hostage:** `{self.parent_view.hostage}`\n"
+                    f"> **Hostage:** `{hostage_display}`\n"
                     f"> **Duration:** `{self.parent_view.duration}`\n"
                     f"> **Denial Reason:** {self.reason.value}"
                 ),
@@ -498,7 +503,7 @@ class DenyHostageModal(discord.ui.Modal, title="Deny Hostage Scene"):
 
 
 class HostageRequestView(discord.ui.View):
-    def __init__(self, ctx, members: int, hostage: str, duration: str, hostage_taker: str | None = None):
+    def __init__(self, ctx, members: int, hostage: str | None, duration: str, hostage_taker: str | None = None):
         super().__init__(timeout=None)
         self.ctx = ctx
         self.members = members
@@ -533,11 +538,12 @@ class HostageRequestView(discord.ui.View):
 
         try:
             dm = await self.ctx.author.create_dm()
+            hostage_display = self.hostage or "No user provided"
             dm_embed = discord.Embed(
                 title="Hostage Scene Accepted",
                 description=(
                     f"> **Members Involved:** `{self.members}`\n"
-                    f"> **Hostage:** `{self.hostage}`\n"
+                    f"> **Hostage:** `{hostage_display}`\n"
                     + (f"> **Hostage Taker:** `{self.hostage_taker}`\n" if self.hostage_taker else "")
                     + f"> **Duration:** `{self.duration}`"
                 ),
@@ -662,15 +668,16 @@ class Hits(commands.Cog):
     @hostage.command(name="place", description="Request approval for an in-game hostage scene.")
     @app_commands.describe(
         members="How many members will be involved? (eg 1, 2, 3). No more than 3 are permitted.",
-        hostage="Who the hostage will be? Enter ROBLOX username. Example: noagonzale38",
+        hostage="Optional hostage ROBLOX username. Leave blank if none is being provided.",
         duration="How long the scene will go on for (approx). Example: 30mins, 15 mins.",
     )
-    async def hostage_place(self, ctx, members: int, hostage: str, *, duration: str):
+    async def hostage_place(self, ctx, members: int, hostage: Optional[str] = None, *, duration: str):
         if members <= 0:
             await ctx.send(embed=error_embed("Invalid Member Count", "Members must be a positive number."))
             return
+        hostage = hostage.strip() if hostage else None
         if hostage:
-            try: 
+            try:
                 float(hostage)
                 await ctx.send(embed=error_embed("Invalid Hostage", "Hostages must not be a number."))
                 return
