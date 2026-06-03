@@ -875,6 +875,16 @@ class StaffManagement(commands.Cog):
             )
             return
 
+        if ctx.author.id == user.id:
+            await ctx.send(
+                embed=error_embed(
+                    "Invalid Target",
+                    "You cannot leave staff feedback for yourself.",
+                ),
+                ephemeral=True,
+            )
+            return
+
         if rating < 1 or rating > 10:
             await ctx.send(embed=error_embed("Invalid Rating", "Rating must be between **1** and **10**."))
             return

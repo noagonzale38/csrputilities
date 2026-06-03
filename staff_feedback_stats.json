@@ -997,8 +997,8 @@
                 "feedback_count": 14
             },
             "1213915425369227334": {
-                "total_rating": 379,
-                "feedback_count": 44
+                "total_rating": 398,
+                "feedback_count": 46
             },
             "1109142957866619013": {
                 "total_rating": 311,
@@ -1225,8 +1225,8 @@
                 "feedback_count": 3
             },
             "1062598700288987236": {
-                "total_rating": 16,
-                "feedback_count": 5
+                "total_rating": 26,
+                "feedback_count": 6
             },
             "1254855170198736909": {
                 "total_rating": 231,
@@ -1681,8 +1681,8 @@
                 "feedback_count": 3
             },
             "654110914311618561": {
-                "total_rating": 483,
-                "feedback_count": 70
+                "total_rating": 493,
+                "feedback_count": 71
             },
             "1261015144612495430": {
                 "total_rating": 248,
@@ -1965,8 +1965,8 @@
                 "feedback_count": 2
             },
             "757981697995178106": {
-                "total_rating": 146,
-                "feedback_count": 17
+                "total_rating": 156,
+                "feedback_count": 18
             },
             "1169361690291359748": {
                 "total_rating": 20,
@@ -2213,8 +2213,8 @@
                 "feedback_count": 2
             },
             "792312950559997973": {
-                "total_rating": 189,
-                "feedback_count": 25
+                "total_rating": 228,
+                "feedback_count": 29
             },
             "1294687552917344327": {
                 "total_rating": 2,
@@ -2381,8 +2381,8 @@
                 "feedback_count": 4
             },
             "656916744673296394": {
-                "total_rating": 30,
-                "feedback_count": 3
+                "total_rating": 40,
+                "feedback_count": 4
             },
             "1400691464224374795": {
                 "total_rating": 61,
@@ -2549,8 +2549,8 @@
                 "feedback_count": 4
             },
             "726507399640252416": {
-                "total_rating": 58,
-                "feedback_count": 6
+                "total_rating": 68,
+                "feedback_count": 7
             },
             "1092489655888379915": {
                 "total_rating": 20,
@@ -23997,6 +23997,50 @@
             "1511100782257242234": {
                 "staff_user_id": "792312950559997973",
                 "rating": 10
+            },
+            "1511412228321050715": {
+                "staff_user_id": "792312950559997973",
+                "rating": 9
+            },
+            "1511413944047108276": {
+                "staff_user_id": "1062598700288987236",
+                "rating": 10
+            },
+            "1511414241801011282": {
+                "staff_user_id": "726507399640252416",
+                "rating": 10
+            },
+            "1511429059668611142": {
+                "staff_user_id": "1213915425369227334",
+                "rating": 10
+            },
+            "1511429150802448506": {
+                "staff_user_id": "792312950559997973",
+                "rating": 10
+            },
+            "1511429297565335623": {
+                "staff_user_id": "757981697995178106",
+                "rating": 10
+            },
+            "1511429826563543100": {
+                "staff_user_id": "654110914311618561",
+                "rating": 10
+            },
+            "1511439959213609043": {
+                "staff_user_id": "792312950559997973",
+                "rating": 10
+            },
+            "1511443480625414337": {
+                "staff_user_id": "792312950559997973",
+                "rating": 10
+            },
+            "1511468855854366801": {
+                "staff_user_id": "656916744673296394",
+                "rating": 10
+            },
+            "1511481050390597842": {
+                "staff_user_id": "1213915425369227334",
+                "rating": 9
             }
         }
     }

@@ -1558,7 +1558,7 @@ async def update_dashboard_settings(guild_id: int, form_data: dict) -> str:
         role_ids = [int(value) for value in _values(key)]
         update_guild_setting(guild_id, key, role_ids)
 
-    for key in ["retirement_log_channel", "staff_feedback_channel", "partnership_log_channel"]:
+    for key in ["retirement_log_channel", "hostage_review_channel", "staff_feedback_channel", "partnership_log_channel"]:
         raw_value = form_data.get(key, "").strip()
         update_guild_setting(guild_id, key, int(raw_value) if raw_value else None)
 

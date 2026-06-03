@@ -122,6 +122,7 @@ PERMISSION_USER_LABELS = {
 DEFAULT_SETTINGS = {
     "staff_roles": [],
     "retirement_log_channel": None,
+    "hostage_review_channel": None,
     "discord_checks_enabled": True,
     "feedback_enabled": False,
     "feedback_questions": ["Why did you decide to leave?"],
@@ -300,6 +301,7 @@ def dashboard_embed(guild: discord.Guild) -> discord.Embed:
 
     staff = _display_role_list(guild, settings.get("staff_roles", []))
     log_ch = f"<#{settings['retirement_log_channel']}>" if settings.get("retirement_log_channel") else "`Not set`"
+    hostage_review_ch = f"<#{settings['hostage_review_channel']}>" if settings.get("hostage_review_channel") else "`Not set`"
     fb_ch = f"<#{settings['staff_feedback_channel']}>" if settings.get("staff_feedback_channel") else "`Not set`"
     partner_log_ch = f"<#{settings['partnership_log_channel']}>" if settings.get("partnership_log_channel") else "`Not set`"
     discord_checks_on = f"{CHECK} Enabled" if settings.get("discord_checks_enabled", True) else f"{CROSS} Disabled"
@@ -320,6 +322,7 @@ def dashboard_embed(guild: discord.Guild) -> discord.Embed:
     desc = (
         f"**Staff Roles:** {staff}\n"
         f"**Retirement Log Channel:** {log_ch}\n"
+        f"**Hostage Review Channel:** {hostage_review_ch}\n"
         f"**Staff Feedback Channel:** {fb_ch}\n"
         f"**Partnership Log Channel:** {partner_log_ch}\n\n"
         f"**Discord Checks:** {discord_checks_on}\n"
@@ -379,6 +382,7 @@ class DashboardView(discord.ui.View):
         options=[
             discord.SelectOption(label="Staff Roles", value="staff_roles", description="Roles removed on retirement"),
             discord.SelectOption(label="Retirement Log Channel", value="retirement_log_channel", description="Where retirement/reinstatement logs go"),
+            discord.SelectOption(label="Hostage Review Channel", value="hostage_review_channel", description="Where hostage requests are reviewed"),
             discord.SelectOption(label="Staff Feedback Channel", value="staff_feedback_channel", description="Where staff feedback is posted"),
             discord.SelectOption(label="Partnership Log Channel", value="partnership_log_channel", description="Where partnership activity is logged"),
             discord.SelectOption(label="Discord Checks Toggle", value="discord_checks_enabled", description="Toggle the automated Discord check loop"),
@@ -412,9 +416,10 @@ class DashboardView(discord.ui.View):
             brand_footer(embed)
             await interaction.response.edit_message(embed=embed, view=view)
 
-        elif choice in ("retirement_log_channel", "staff_feedback_channel", "partnership_log_channel"):
+        elif choice in ("retirement_log_channel", "hostage_review_channel", "staff_feedback_channel", "partnership_log_channel"):
             labels = {
                 "retirement_log_channel": "Retirement Log Channel",
+                "hostage_review_channel": "Hostage Review Channel",
                 "staff_feedback_channel": "Staff Feedback Channel",
                 "partnership_log_channel": "Partnership Log Channel",
             }

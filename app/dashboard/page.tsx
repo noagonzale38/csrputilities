@@ -1978,6 +1978,7 @@ function Overview({ data }: { data: DashboardData }) {
           <article className="setting-card">
             <h2>Channels</h2>
             <p>Retirement log: {fieldValue(data.readable_settings.retirement_log_channel)}</p>
+            <p>Hostage review: {fieldValue(data.readable_settings.hostage_review_channel)}</p>
             <p>Feedback channel: {fieldValue(data.readable_settings.staff_feedback_channel)}</p>
             <p>Partnership log: {fieldValue(data.readable_settings.partnership_log_channel)}</p>
           </article>
@@ -2806,6 +2807,10 @@ function BotSettings({ data }: { data: DashboardData }) {
           <label>
             Retirement Log Channel
             <ChannelSelect name="retirement_log_channel" channels={data.channels} selected={data.settings.retirement_log_channel} />
+          </label>
+          <label>
+            Hostage Review Channel
+            <ChannelSelect name="hostage_review_channel" channels={data.channels} selected={data.settings.hostage_review_channel} />
           </label>
           <label>
             Staff Feedback Channel

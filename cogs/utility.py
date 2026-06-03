@@ -9,6 +9,7 @@ import re
 import shlex
 import subprocess
 import traceback
+import logging
 from dateutil.parser import parse as parse_time_str
 from moviepy.editor import VideoFileClip
 import aiohttp
@@ -226,7 +227,7 @@ class CodexSessionView(discord.ui.View):
         await interaction.response.defer(ephemeral=True, thinking=False)
         follow_up_prompt = self._build_follow_up_prompt(reply_prompt)
         self.cog._active_codex_sessions[self.owner.id] = self
-        self.run_task = asyncio.create_task(self.start_run(follow_up_prompt))
+        self.cog._track_codex_session_task(self, self.start_run(follow_up_prompt))
         await interaction.followup.send("Started follow-up Codex run.", ephemeral=True)
 
     @discord.ui.button(label="Reply to Codex", style=discord.ButtonStyle.primary)
@@ -324,6 +325,21 @@ class Utility(commands.Cog):
             required = getattr(param, "required", False)
             parts.append(f"<{display_name}>" if required else f"[{display_name}]")
         return " ".join(parts) if parts else "None"
+
+    def _track_codex_session_task(self, session_view: CodexSessionView, coro) -> None:
+        task = asyncio.create_task(coro)
+        session_view.run_task = task
+
+        def _consume_task_result(completed_task: asyncio.Task) -> None:
+            with contextlib.suppress(asyncio.CancelledError):
+                exc = completed_task.exception()
+                if exc is not None:
+                    logging.error(
+                        "Unhandled error in Codex session task",
+                        exc_info=(type(exc), exc, exc.__traceback__),
+                    )
+
+        task.add_done_callback(_consume_task_result)
 
     def _command_category(self, qualified_name: str) -> str:
         if qualified_name.startswith("erlc "):
@@ -813,16 +829,15 @@ class Utility(commands.Cog):
     async def codex(self, ctx: commands.Context, *, prompt: str):
         await ctx.defer()
         active_session = self._active_codex_sessions.get(ctx.author.id)
-        if active_session and active_session.run_task and not active_session.run_task.done():
+        if active_session and not active_session.finished:
             await ctx.send(embed=error_embed("Codex Busy", "You already have a Codex run in progress. Use the existing Stop button first."))
             return
 
         session_view = CodexSessionView(self, ctx, prompt)
         progress_message = await ctx.send(embed=session_view.build_embed(), view=session_view)
         session_view.message = progress_message
-        session_view.run_task = asyncio.create_task(session_view.start_run(prompt))
         self._active_codex_sessions[ctx.author.id] = session_view
-        await session_view.run_task
+        self._track_codex_session_task(session_view, session_view.start_run(prompt))
 
     @commands.hybrid_command(name="sales", description="Get current group sales data.")
     @is_sales_authorized()

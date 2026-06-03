@@ -36,6 +36,21 @@ def can_clear_hits(member: discord.Member) -> bool:
     return bool(member_role_ids & allowed_role_ids)
 
 
+def can_review_hostage_request(member: discord.Member) -> bool:
+    if not getattr(member, "guild", None):
+        return False
+    if member.id in CSRPUTILS_DEVS:
+        return True
+
+    settings = get_guild_settings(member.guild.id)
+    staff_role_ids = {int(role_id) for role_id in settings.get("staff_roles", [])}
+    if not staff_role_ids:
+        return False
+
+    member_role_ids = {role.id for role in member.roles}
+    return bool(member_role_ids & staff_role_ids)
+
+
 class DenyHitModal(discord.ui.Modal, title="Deny Hit"):
     reason = ui.TextInput(label="Reason", placeholder="Reason for denying the hit", required=True)
 
@@ -206,6 +221,119 @@ class HitRequestView(discord.ui.View):
         await interaction.response.send_modal(DenyHitModal(self, interaction))
 
 
+class DenyHostageModal(discord.ui.Modal, title="Deny Hostage Scene"):
+    reason = ui.TextInput(label="Reason", placeholder="Reason for denying the hostage scene", required=True)
+
+    def __init__(self, parent_view, review_message: discord.Message):
+        super().__init__()
+        self.parent_view = parent_view
+        self.review_message = review_message
+
+    async def on_submit(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="Hostage Scene Denied",
+            description=(
+                f"> **Requested By:** {self.parent_view.ctx.author.mention}\n"
+                f"> **Members Involved:** `{self.parent_view.members}`\n"
+                f"> **Hostage:** `{self.parent_view.hostage}`\n"
+                f"> **Duration:** `{self.parent_view.duration}`\n"
+                f"> **Denied By:** {interaction.user.mention}\n"
+                f"> **Denial Reason:** {self.reason.value}"
+            ),
+            color=BLANK_COLOR,
+        )
+        embed.set_author(name="CSRP Utilities", icon_url=CSRP_ICON)
+        if self.parent_view.ctx.author.display_avatar:
+            embed.set_thumbnail(url=self.parent_view.ctx.author.display_avatar.url)
+        brand_footer(embed)
+        await self.review_message.edit(embed=embed, view=None)
+
+        try:
+            dm = await self.parent_view.ctx.author.create_dm()
+            dm_embed = discord.Embed(
+                title="Hostage Scene Denied",
+                description=(
+                    f"> **Members Involved:** `{self.parent_view.members}`\n"
+                    f"> **Hostage:** `{self.parent_view.hostage}`\n"
+                    f"> **Duration:** `{self.parent_view.duration}`\n"
+                    f"> **Denial Reason:** {self.reason.value}"
+                ),
+                color=BLANK_COLOR,
+            )
+            dm_embed.set_author(name="California State Roleplay", icon_url=CSRP_ICON)
+            brand_footer(dm_embed)
+            await dm.send(embed=dm_embed)
+        except discord.Forbidden:
+            pass
+
+        await interaction.response.send_message(
+            embed=success_embed("Hostage Scene Denied", "The hostage request has been denied."),
+            ephemeral=True,
+        )
+
+
+class HostageRequestView(discord.ui.View):
+    def __init__(self, ctx, members: int, hostage: str, duration: str):
+        super().__init__(timeout=None)
+        self.ctx = ctx
+        self.members = members
+        self.hostage = hostage
+        self.duration = duration
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if can_review_hostage_request(interaction.user):
+            return True
+        await interaction.response.send_message(
+            embed=error_embed("Not Permitted", "Only configured staff members can review hostage requests."),
+            ephemeral=True,
+        )
+        return False
+
+    @discord.ui.button(label="Accept", style=discord.ButtonStyle.green, custom_id="hostage_accept")
+    async def accept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="Hostage Scene Accepted",
+            description=(
+                f"> **Requested By:** {self.ctx.author.mention}\n"
+                f"> **Members Involved:** `{self.members}`\n"
+                f"> **Hostage:** `{self.hostage}`\n"
+                f"> **Duration:** `{self.duration}`\n"
+                f"> **Accepted By:** {interaction.user.mention}"
+            ),
+            color=BLANK_COLOR,
+        )
+        embed.set_author(name="CSRP Utilities", icon_url=CSRP_ICON)
+        if self.ctx.author.display_avatar:
+            embed.set_thumbnail(url=self.ctx.author.display_avatar.url)
+        brand_footer(embed)
+        await interaction.message.edit(embed=embed, view=None)
+        await interaction.response.send_message(
+            embed=success_embed("Hostage Scene Accepted", "The hostage request has been accepted."),
+            ephemeral=True,
+        )
+
+        try:
+            dm = await self.ctx.author.create_dm()
+            dm_embed = discord.Embed(
+                title="Hostage Scene Accepted",
+                description=(
+                    f"> **Members Involved:** `{self.members}`\n"
+                    f"> **Hostage:** `{self.hostage}`\n"
+                    f"> **Duration:** `{self.duration}`"
+                ),
+                color=BLANK_COLOR,
+            )
+            dm_embed.set_author(name="California State Roleplay", icon_url=CSRP_ICON)
+            brand_footer(dm_embed)
+            await dm.send(embed=dm_embed)
+        except discord.Forbidden:
+            pass
+
+    @discord.ui.button(label="Deny", style=discord.ButtonStyle.danger, custom_id="hostage_deny")
+    async def deny_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(DenyHostageModal(self, interaction.message))
+
+
 class Hits(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -221,6 +349,19 @@ class Hits(commands.Cog):
                     "> `/hit complete` — Mark a hit as completed\n"
                     "> `/hit clear` — Clear all active hits"
                 ),
+                color=BLANK_COLOR,
+            )
+            embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else "")
+            embed.set_thumbnail(url=CSRP_ICON)
+            brand_footer(embed)
+            await ctx.send(embed=embed)
+
+    @commands.hybrid_group(name="hostage", description="Hostage roleplay request commands.")
+    async def hostage(self, ctx: commands.Context):
+        if ctx.invoked_subcommand is None:
+            embed = discord.Embed(
+                title="Hostage Commands",
+                description="> `/hostage place` — Request approval for an in-game hostage scene",
                 color=BLANK_COLOR,
             )
             embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else "")
@@ -264,6 +405,49 @@ class Hits(commands.Cog):
         view = HitRequestView(ctx, username, bounty, reason, proof.url if proof else None)
         await channel.send(embed=embed, view=view)
         await ctx.send(embed=success_embed("Hit Submitted", "Hit request sent. You will be notified when it's reviewed."))
+
+    @hostage.command(name="place", description="Request approval for an in-game hostage scene.")
+    @app_commands.describe(
+        members="How many members will be involved",
+        hostage="Who the hostage will be",
+        duration="How long the scene will go on for",
+    )
+    async def hostage_place(self, ctx, members: int, hostage: str, *, duration: str):
+        if members <= 0:
+            await ctx.send(embed=error_embed("Invalid Member Count", "Members must be a positive number."))
+            return
+
+        settings = get_guild_settings(ctx.guild.id)
+        review_channel_id = settings.get("hostage_review_channel")
+        if not review_channel_id:
+            await ctx.send(embed=error_embed("Not Configured", "Hostage review channel has not been configured in `/settings`."))
+            return
+
+        channel = self.bot.get_channel(int(review_channel_id))
+        if channel is None:
+            await ctx.send(embed=error_embed("Invalid Channel", "The configured hostage review channel could not be found."))
+            return
+
+        description = (
+            f"> **Requested By:** {ctx.author.mention}\n"
+            f"> **Members Involved:** `{members}`\n"
+            f"> **Hostage:** `{hostage}`\n"
+            f"> **Duration:** `{duration}`"
+        )
+        embed = discord.Embed(title="Hostage Scene Request", description=description, color=BLANK_COLOR)
+        embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else "")
+        if ctx.author.display_avatar:
+            embed.set_thumbnail(url=ctx.author.display_avatar.url)
+        brand_footer(embed)
+
+        view = HostageRequestView(ctx, members, hostage, duration)
+        await channel.send(embed=embed, view=view)
+        await ctx.send(
+            embed=success_embed(
+                "Hostage Scene Submitted",
+                "Your hostage scene request has been sent for staff review. You will be DMed once it is accepted or denied.",
+            )
+        )
 
     @hit.command(name="active", description="Shows all active hits.")
     async def active(self, ctx):

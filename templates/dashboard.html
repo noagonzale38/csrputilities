@@ -447,6 +447,8 @@
           <input name="retire_allowed_roles" value="{{ settings.retire_allowed_roles|join(',') }}">
           <label>Retirement log channel ID</label>
           <input name="retirement_log_channel" value="{{ settings.retirement_log_channel or '' }}">
+          <label>Hostage review channel ID</label>
+          <input name="hostage_review_channel" value="{{ settings.hostage_review_channel or '' }}">
           <label>Staff feedback channel ID</label>
           <input name="staff_feedback_channel" value="{{ settings.staff_feedback_channel or '' }}">
           <label class="checkbox-line"><input type="checkbox" name="discord_checks_enabled" {% if settings.discord_checks_enabled != false %}checked{% endif %}> Discord checks enabled</label>
