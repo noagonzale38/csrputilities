@@ -164,7 +164,7 @@ class StaffHostageRequestModal(discord.ui.Modal, title="Manual Hostage Request")
     )
     hostage = ui.TextInput(
         label="Hostage Username",
-        placeholder="Enter ROBLOX username",
+        placeholder="Enter ROBLOX username (OPTIONAL)",
         required=False,
         max_length=32,
     )
