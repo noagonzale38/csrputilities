@@ -408,14 +408,21 @@ class Hits(commands.Cog):
 
     @hostage.command(name="place", description="Request approval for an in-game hostage scene.")
     @app_commands.describe(
-        members="How many members will be involved",
-        hostage="Who the hostage will be",
-        duration="How long the scene will go on for",
+        members="How many members will be involved? (eg 1, 2, 3). No more than 6 are permitted.",
+        hostage="Who the hostage will be? Enter ROBLOX username. Example: noagonzale38",
+        duration="How long the scene will go on for (approx). Example: 30mins, 15 mins.",
     )
     async def hostage_place(self, ctx, members: int, hostage: str, *, duration: str):
         if members <= 0:
             await ctx.send(embed=error_embed("Invalid Member Count", "Members must be a positive number."))
             return
+        if hostage:
+            try: 
+                float(hostage)
+                await ctx.send(embed=error_embed("Invalid Hostage", "Hostages must not be a number."))
+                return
+            except ValueError:
+                pass
 
         settings = get_guild_settings(ctx.guild.id)
         review_channel_id = settings.get("hostage_review_channel")
