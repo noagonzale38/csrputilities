@@ -158,7 +158,7 @@ class StaffHostageRequestModal(discord.ui.Modal, title="Manual Hostage Request")
         label="Members Involved",
         placeholder="1",
         required=True,
-        max_length=2,
+        max_length=1,
     )
     hostage = ui.TextInput(
         label="Hostage Username",
@@ -661,7 +661,7 @@ class Hits(commands.Cog):
 
     @hostage.command(name="place", description="Request approval for an in-game hostage scene.")
     @app_commands.describe(
-        members="How many members will be involved? (eg 1, 2, 3). No more than 6 are permitted.",
+        members="How many members will be involved? (eg 1, 2, 3). No more than 3 are permitted.",
         hostage="Who the hostage will be? Enter ROBLOX username. Example: noagonzale38",
         duration="How long the scene will go on for (approx). Example: 30mins, 15 mins.",
     )
