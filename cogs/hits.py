@@ -559,12 +559,14 @@ class Hits(commands.Cog):
         self.bot = bot
         self._hostage_sticky_registered = False
 
+    async def cog_load(self):
+        if self._hostage_sticky_registered:
+            return
+        self.bot.add_view(HostageStickyView())
+        self._hostage_sticky_registered = True
+
     @commands.Cog.listener()
     async def on_ready(self):
-        if not self._hostage_sticky_registered:
-            self.bot.add_view(HostageStickyView())
-            self._hostage_sticky_registered = True
-
         for guild in self.bot.guilds:
             settings = get_guild_settings(guild.id)
             review_channel_id = settings.get("hostage_review_channel")
