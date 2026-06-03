@@ -715,8 +715,27 @@ class ChannelConfigView(discord.ui.View):
             await interaction.response.send_message("Select a channel first.", ephemeral=True)
             return
         update_guild_setting(self.guild.id, self.setting_key, self.selected_channel)
+        sticky_sync_error = None
+        if self.setting_key == "hostage_review_channel":
+            channel = interaction.client.get_channel(int(self.selected_channel))
+            if channel is not None:
+                try:
+                    from cogs.hits import ensure_hostage_sticky_message
+
+                    await ensure_hostage_sticky_message(channel)
+                except (discord.Forbidden, discord.HTTPException) as exc:
+                    sticky_sync_error = str(exc)
         view = DashboardView(self.guild, self.author)
         await edit_settings_dashboard(interaction.response, self.guild, view)
+        if sticky_sync_error:
+            await interaction.followup.send(
+                embed=error_embed(
+                    "Sticky Message Not Sent",
+                    "The hostage review channel was saved, but I could not send the initial sticky embed there."
+                    f"\n```{sticky_sync_error[:1500]}```",
+                ),
+                ephemeral=True,
+            )
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, row=2)
     async def back_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
