@@ -2,10 +2,11 @@ import discord
 from discord.ext import commands
 from discord import app_commands, ui
 import json
+import contextlib
 from typing import Optional
 
 from config import active_hits, BLACKLIST_ROLE_ID, CSRPUTILS_DEVS, DEV_ROLE_IDS
-from cogs.settings import get_guild_settings
+from cogs.settings import get_guild_settings, update_guild_setting
 from cogs.helpers import (
     Colors, BLANK_COLOR, CHECK, CROSS, CSRP_ICON,
     success_embed, error_embed, info_embed, brand_footer, embed_description,
@@ -49,6 +50,230 @@ def can_review_hostage_request(member: discord.Member) -> bool:
 
     member_role_ids = {role.id for role in member.roles}
     return bool(member_role_ids & staff_role_ids)
+
+
+def _build_hostage_sticky_embed(guild: discord.Guild) -> discord.Embed:
+    embed = discord.Embed(
+        title="Hostage Requests",
+        description=(
+            "Staff can approve hostage requests sent by members here. In the case that a member asks you for hostage "
+            "permissions, and you want to manually approve it here, click the button below to fill out the hostage request form."
+        ),
+        color=BLANK_COLOR,
+    )
+    embed.set_author(name=guild.name, icon_url=guild.icon.url if guild.icon else "")
+    brand_footer(embed)
+    return embed
+
+
+def _build_hostage_request_embed(
+    guild: discord.Guild,
+    requester: discord.abc.User,
+    members: int,
+    hostage: str,
+    duration: str,
+    *,
+    hostage_taker: str | None = None,
+) -> discord.Embed:
+    description = (
+        f"> **Requested By:** {requester.mention}\n"
+        f"> **Members Involved:** `{members}`\n"
+        f"> **Hostage:** `{hostage}`\n"
+    )
+    if hostage_taker:
+        description += f"> **Hostage Taker:** `{hostage_taker}`\n"
+    description += f"> **Duration:** `{duration}`"
+
+    embed = discord.Embed(title="Hostage Scene Request", description=description, color=BLANK_COLOR)
+    embed.set_author(name=guild.name, icon_url=guild.icon.url if guild.icon else "")
+    if requester.display_avatar:
+        embed.set_thumbnail(url=requester.display_avatar.url)
+    brand_footer(embed)
+    return embed
+
+
+def _build_hostage_accepted_embed(
+    requester: discord.abc.User,
+    members: int,
+    hostage: str,
+    duration: str,
+    accepted_by: discord.abc.User,
+    *,
+    hostage_taker: str | None = None,
+) -> discord.Embed:
+    description = (
+        f"> **Requested By:** {requester.mention}\n"
+        f"> **Members Involved:** `{members}`\n"
+        f"> **Hostage:** `{hostage}`\n"
+    )
+    if hostage_taker:
+        description += f"> **Hostage Taker:** `{hostage_taker}`\n"
+    description += (
+        f"> **Duration:** `{duration}`\n"
+        f"> **Accepted By:** {accepted_by.mention}"
+    )
+
+    embed = discord.Embed(
+        title="Hostage Scene Accepted",
+        description=description,
+        color=BLANK_COLOR,
+    )
+    embed.set_author(name="CSRP Utilities", icon_url=CSRP_ICON)
+    if requester.display_avatar:
+        embed.set_thumbnail(url=requester.display_avatar.url)
+    brand_footer(embed)
+    return embed
+
+
+class HostageStickyView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if can_review_hostage_request(interaction.user):
+            return True
+        await interaction.response.send_message(
+            embed=error_embed("Not Permitted", "Only configured staff members can create manual hostage approvals."),
+            ephemeral=True,
+        )
+        return False
+
+    @discord.ui.button(
+        label="Create Hostage Request",
+        style=discord.ButtonStyle.primary,
+        custom_id="hostage_manual_create",
+    )
+    async def create_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(StaffHostageRequestModal())
+
+
+class StaffHostageRequestModal(discord.ui.Modal, title="Manual Hostage Request"):
+    hostage_taker = ui.TextInput(
+        label="Hostage Taker Username",
+        placeholder="Enter ROBLOX username",
+        required=True,
+        max_length=32,
+    )
+    members = ui.TextInput(
+        label="Members Involved",
+        placeholder="1",
+        required=True,
+        max_length=2,
+    )
+    hostage = ui.TextInput(
+        label="Hostage Username",
+        placeholder="Enter ROBLOX username",
+        required=True,
+        max_length=32,
+    )
+    duration = ui.TextInput(
+        label="Duration",
+        placeholder="30 mins",
+        required=True,
+        max_length=100,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not interaction.guild:
+            await interaction.response.send_message(
+                embed=error_embed("Unavailable", "This form can only be used in a server."),
+                ephemeral=True,
+            )
+            return
+
+        if not can_review_hostage_request(interaction.user):
+            await interaction.response.send_message(
+                embed=error_embed("Not Permitted", "Only configured staff members can create manual hostage approvals."),
+                ephemeral=True,
+            )
+            return
+
+        members_value = self.members.value.strip()
+        if not members_value.isdigit() or int(members_value) <= 0:
+            await interaction.response.send_message(
+                embed=error_embed("Invalid Member Count", "Members must be a positive number."),
+                ephemeral=True,
+            )
+            return
+
+        hostage_value = self.hostage.value.strip()
+        hostage_taker_value = self.hostage_taker.value.strip()
+        duration_value = self.duration.value.strip()
+
+        for label, value in (("Hostage", hostage_value), ("Hostage Taker", hostage_taker_value)):
+            try:
+                float(value)
+                await interaction.response.send_message(
+                    embed=error_embed(f"Invalid {label}", f"{label}s must not be a number."),
+                    ephemeral=True,
+                )
+                return
+            except ValueError:
+                pass
+
+        settings = get_guild_settings(interaction.guild.id)
+        review_channel_id = settings.get("hostage_review_channel")
+        if not review_channel_id:
+            await interaction.response.send_message(
+                embed=error_embed("Not Configured", "Hostage review channel has not been configured in `/settings`."),
+                ephemeral=True,
+            )
+            return
+
+        channel = interaction.client.get_channel(int(review_channel_id))
+        if channel is None:
+            await interaction.response.send_message(
+                embed=error_embed("Invalid Channel", "The configured hostage review channel could not be found."),
+                ephemeral=True,
+            )
+            return
+
+        embed = _build_hostage_accepted_embed(
+            interaction.user,
+            int(members_value),
+            hostage_value,
+            duration_value,
+            interaction.user,
+            hostage_taker=hostage_taker_value,
+        )
+        await channel.send(embed=embed)
+        await refresh_hostage_sticky_message(channel)
+        await interaction.response.send_message(
+            embed=success_embed("Hostage Scene Accepted", "The manual hostage request has been created and auto-approved."),
+            ephemeral=True,
+        )
+
+
+async def ensure_hostage_sticky_message(channel: discord.abc.MessageableChannel) -> None:
+    guild = getattr(channel, "guild", None)
+    if guild is None:
+        return
+
+    settings = get_guild_settings(guild.id)
+    sticky_message_id = settings.get("hostage_sticky_message_id")
+    if sticky_message_id:
+        with contextlib.suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
+            await channel.fetch_message(int(sticky_message_id))
+            return
+
+    message = await channel.send(embed=_build_hostage_sticky_embed(guild), view=HostageStickyView())
+    update_guild_setting(guild.id, "hostage_sticky_message_id", message.id)
+
+
+async def refresh_hostage_sticky_message(channel: discord.abc.MessageableChannel) -> None:
+    guild = getattr(channel, "guild", None)
+    if guild is None:
+        return
+
+    settings = get_guild_settings(guild.id)
+    sticky_message_id = settings.get("hostage_sticky_message_id")
+    if sticky_message_id:
+        with contextlib.suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
+            old_message = await channel.fetch_message(int(sticky_message_id))
+            await old_message.delete()
+
+    message = await channel.send(embed=_build_hostage_sticky_embed(guild), view=HostageStickyView())
+    update_guild_setting(guild.id, "hostage_sticky_message_id", message.id)
 
 
 class DenyHitModal(discord.ui.Modal, title="Deny Hit"):
@@ -273,12 +498,13 @@ class DenyHostageModal(discord.ui.Modal, title="Deny Hostage Scene"):
 
 
 class HostageRequestView(discord.ui.View):
-    def __init__(self, ctx, members: int, hostage: str, duration: str):
+    def __init__(self, ctx, members: int, hostage: str, duration: str, hostage_taker: str | None = None):
         super().__init__(timeout=None)
         self.ctx = ctx
         self.members = members
         self.hostage = hostage
         self.duration = duration
+        self.hostage_taker = hostage_taker
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if can_review_hostage_request(interaction.user):
@@ -291,21 +517,14 @@ class HostageRequestView(discord.ui.View):
 
     @discord.ui.button(label="Accept", style=discord.ButtonStyle.green, custom_id="hostage_accept")
     async def accept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(
-            title="Hostage Scene Accepted",
-            description=(
-                f"> **Requested By:** {self.ctx.author.mention}\n"
-                f"> **Members Involved:** `{self.members}`\n"
-                f"> **Hostage:** `{self.hostage}`\n"
-                f"> **Duration:** `{self.duration}`\n"
-                f"> **Accepted By:** {interaction.user.mention}"
-            ),
-            color=BLANK_COLOR,
+        embed = _build_hostage_accepted_embed(
+            self.ctx.author,
+            self.members,
+            self.hostage,
+            self.duration,
+            interaction.user,
+            hostage_taker=self.hostage_taker,
         )
-        embed.set_author(name="CSRP Utilities", icon_url=CSRP_ICON)
-        if self.ctx.author.display_avatar:
-            embed.set_thumbnail(url=self.ctx.author.display_avatar.url)
-        brand_footer(embed)
         await interaction.message.edit(embed=embed, view=None)
         await interaction.response.send_message(
             embed=success_embed("Hostage Scene Accepted", "The hostage request has been accepted."),
@@ -319,7 +538,8 @@ class HostageRequestView(discord.ui.View):
                 description=(
                     f"> **Members Involved:** `{self.members}`\n"
                     f"> **Hostage:** `{self.hostage}`\n"
-                    f"> **Duration:** `{self.duration}`"
+                    + (f"> **Hostage Taker:** `{self.hostage_taker}`\n" if self.hostage_taker else "")
+                    + f"> **Duration:** `{self.duration}`"
                 ),
                 color=BLANK_COLOR,
             )
@@ -337,6 +557,37 @@ class HostageRequestView(discord.ui.View):
 class Hits(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self._hostage_sticky_registered = False
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if not self._hostage_sticky_registered:
+            self.bot.add_view(HostageStickyView())
+            self._hostage_sticky_registered = True
+
+        for guild in self.bot.guilds:
+            settings = get_guild_settings(guild.id)
+            review_channel_id = settings.get("hostage_review_channel")
+            if not review_channel_id:
+                continue
+            channel = self.bot.get_channel(int(review_channel_id))
+            if channel is not None:
+                await ensure_hostage_sticky_message(channel)
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if message.author.bot or not message.guild:
+            return
+
+        settings = get_guild_settings(message.guild.id)
+        review_channel_id = settings.get("hostage_review_channel")
+        if not review_channel_id or message.channel.id != int(review_channel_id):
+            return
+
+        if settings.get("hostage_sticky_message_id") == message.id:
+            return
+
+        await refresh_hostage_sticky_message(message.channel)
 
     @commands.hybrid_group(name="hit", description="Hit related commands.")
     async def hit(self, ctx: commands.Context):
@@ -435,20 +686,10 @@ class Hits(commands.Cog):
             await ctx.send(embed=error_embed("Invalid Channel", "The configured hostage review channel could not be found."))
             return
 
-        description = (
-            f"> **Requested By:** {ctx.author.mention}\n"
-            f"> **Members Involved:** `{members}`\n"
-            f"> **Hostage:** `{hostage}`\n"
-            f"> **Duration:** `{duration}`"
-        )
-        embed = discord.Embed(title="Hostage Scene Request", description=description, color=BLANK_COLOR)
-        embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else "")
-        if ctx.author.display_avatar:
-            embed.set_thumbnail(url=ctx.author.display_avatar.url)
-        brand_footer(embed)
-
         view = HostageRequestView(ctx, members, hostage, duration)
+        embed = _build_hostage_request_embed(ctx.guild, ctx.author, members, hostage, duration)
         await channel.send(embed=embed, view=view)
+        await refresh_hostage_sticky_message(channel)
         await ctx.send(
             embed=success_embed(
                 "Hostage Scene Submitted",
