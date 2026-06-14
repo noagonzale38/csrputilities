@@ -26,15 +26,15 @@ from cogs.helpers import (
     api_get, ConfirmView, generalised_interaction_check_failure,
 )
 from cogs.settings import get_guild_settings, has_setting_permission, member_has_rank_or_higher
-from lib.codex_runner import CodexRunControl, stream_codex_prompt
+from lib.claude_runner import ClaudeRunControl, stream_claude_prompt
 
 MESSAGE_LINK_RE = re.compile(
     r"https?://(?:ptb\.|canary\.)?discord(?:app)?\.com/channels/(\d+)/(\d+)/(\d+)"
 )
 
 start_time = time.time()
-CODEX_PREVIEW_LIMIT = 1200
-CODEX_CONTEXT_LIMIT = 6000
+CLAUDE_PREVIEW_LIMIT = 1200
+CLAUDE_CONTEXT_LIMIT = 6000
 
 database_options = {
     "postgres": "ticketsbot",
@@ -50,14 +50,18 @@ def _truncate_tail(value: str, limit: int) -> str:
     return f"...\n{value[-limit:]}"
 
 
-class CodexReplyModal(discord.ui.Modal, title="Reply to Codex"):
+def _sanitize_codeblock(value: str) -> str:
+    return value.replace("```", "​`​`​`")
+
+
+class ClaudeReplyModal(discord.ui.Modal, title="Reply to Claude"):
     reply_prompt = discord.ui.TextInput(
         label="Follow-up Prompt",
         style=discord.TextStyle.paragraph,
         max_length=4000,
     )
 
-    def __init__(self, session_view: "CodexSessionView"):
+    def __init__(self, session_view: "ClaudeSessionView"):
         super().__init__()
         self.session_view = session_view
 
@@ -65,7 +69,7 @@ class CodexReplyModal(discord.ui.Modal, title="Reply to Codex"):
         await self.session_view.start_follow_up(interaction, self.reply_prompt.value)
 
 
-class CodexSessionView(discord.ui.View):
+class ClaudeSessionView(discord.ui.View):
     def __init__(self, cog: "Utility", ctx: commands.Context, prompt: str):
         super().__init__(timeout=3600)
         self.cog = cog
@@ -73,7 +77,7 @@ class CodexSessionView(discord.ui.View):
         self.owner = ctx.author
         self.prompt = prompt
         self.message: discord.Message | None = None
-        self.control: CodexRunControl | None = None
+        self.control: ClaudeRunControl | None = None
         self.latest_stdout = ""
         self.latest_stderr = ""
         self.last_return_code: int | None = None
@@ -97,6 +101,7 @@ class CodexSessionView(discord.ui.View):
             return
         self.reply_button.disabled = not self.finished
         self.stop_button.disabled = self.finished
+        self.restart_button.disabled = not self.finished
 
     def build_embed(self) -> discord.Embed:
         summary = []
@@ -109,22 +114,28 @@ class CodexSessionView(discord.ui.View):
                 summary.append(f"> **Status:** {'Completed' if self.last_return_code == 0 else 'Failed'}")
             if self.last_return_code is not None:
                 summary.append(f"> **Exit Code:** `{self.last_return_code}`")
-            summary.append("> **Controls:** Use `Reply to Codex` below to continue this session")
+            summary.append("> **Controls:** Use `Reply to Claude` below to continue this session")
         else:
             summary.append("> **Status:** Running")
-            summary.append("> **Controls:** Use `Stop Codex` below to cancel this run")
+            summary.append("> **Controls:** Use `Stop Claude` below to cancel this run")
         summary.append(f"> **User:** {self.owner.mention}")
         summary.append(f"> **Prompt:** `{self.prompt[:200]}`")
         if self.latest_stdout.strip():
-            summary.append(f"> **Stdout Preview:** ```\n{_truncate_tail(self.latest_stdout, CODEX_PREVIEW_LIMIT)}\n```")
+            preview = _sanitize_codeblock(_truncate_tail(self.latest_stdout, CLAUDE_PREVIEW_LIMIT))
+            summary.append(f"**Stdout Preview:**\n```\n{preview}\n```")
         if self.latest_stderr.strip():
-            summary.append(f"> **Stderr Preview:** ```\n{_truncate_tail(self.latest_stderr, CODEX_PREVIEW_LIMIT)}\n```")
+            preview = _sanitize_codeblock(_truncate_tail(self.latest_stderr, CLAUDE_PREVIEW_LIMIT))
+            summary.append(f"**Stderr Preview:**\n```\n{preview}\n```")
         if self.last_error:
             summary.append(f"> **Error:** `{self.last_error[:300]}`")
 
+        description = "\n".join(summary)
+        if len(description) > 4000:
+            description = description[:4000] + "\n..."
+
         embed = discord.Embed(
-            title="Codex Command Complete" if self.finished else "Codex Command Running",
-            description="\n".join(summary),
+            title="Claude Command Complete" if self.finished else "Claude Command Running",
+            description=description,
             color=BLANK_COLOR if (self.last_return_code in (None, 0) and not self.last_error) else discord.Color.red(),
         )
         author_name = self.ctx.guild.name if self.ctx.guild else self.owner.display_name
@@ -139,14 +150,16 @@ class CodexSessionView(discord.ui.View):
         self._set_button_states()
         if not self.message:
             return
-        with contextlib.suppress(discord.HTTPException):
-            await self.message.edit(embed=self.build_embed(), view=self)
+        try:
+            await self.message.edit(embed=self.build_embed(), view=self, legacy_embeds=True)
+        except discord.HTTPException as exc:
+            logging.warning("Failed to update Claude session embed: %s", exc)
 
     def _build_follow_up_prompt(self, prompt: str) -> str:
-        prior_stdout = _truncate_tail(self.latest_stdout, CODEX_CONTEXT_LIMIT) or "(no stdout)"
-        prior_stderr = _truncate_tail(self.latest_stderr, CODEX_CONTEXT_LIMIT // 2) or "(no stderr)"
+        prior_stdout = _truncate_tail(self.latest_stdout, CLAUDE_CONTEXT_LIMIT) or "(no stdout)"
+        prior_stderr = _truncate_tail(self.latest_stderr, CLAUDE_CONTEXT_LIMIT // 2) or "(no stderr)"
         return (
-            "Continue this Codex task using the previous run as context.\n\n"
+            "Continue this Claude task using the previous run as context.\n\n"
             f"Previous prompt:\n{self.prompt}\n\n"
             f"Previous stdout:\n{prior_stdout}\n\n"
             f"Previous stderr:\n{prior_stderr}\n\n"
@@ -168,7 +181,7 @@ class CodexSessionView(discord.ui.View):
         with contextlib.suppress(discord.HTTPException):
             output_file = discord.File(
                 io.BytesIO("\n\n".join(output_sections).encode("utf-8")),
-                filename="codex-output.txt",
+                filename="claude-output.txt",
             )
             await self.ctx.send(file=output_file)
 
@@ -180,7 +193,7 @@ class CodexSessionView(discord.ui.View):
         self.last_error = None
         self.finished = False
         self.stop_requested = False
-        self.control = CodexRunControl()
+        self.control = ClaudeRunControl()
         await self.refresh_message()
 
         async def on_update(stdout_text: str, stderr_text: str, finished: bool):
@@ -190,7 +203,7 @@ class CodexSessionView(discord.ui.View):
                 await self.refresh_message()
 
         try:
-            return_code, stdout, stderr = await stream_codex_prompt(
+            return_code, stdout, stderr = await stream_claude_prompt(
                 prompt,
                 on_update=on_update,
                 update_interval=15,
@@ -204,41 +217,41 @@ class CodexSessionView(discord.ui.View):
         finally:
             self.finished = True
             self.control = None
-            await self.refresh_message()
+            if self.cog._active_claude_sessions.get(self.owner.id) is self:
+                self.cog._active_claude_sessions.pop(self.owner.id, None)
             await self._send_output_file()
-            if self.cog._active_codex_sessions.get(self.owner.id) is self:
-                self.cog._active_codex_sessions.pop(self.owner.id, None)
+            await self.refresh_message()
 
     async def start_follow_up(self, interaction: discord.Interaction, reply_prompt: str) -> None:
         if not self.finished:
             await interaction.response.send_message(
-                embed=error_embed("Codex Busy", "Wait for the current Codex run to finish before replying."),
+                embed=error_embed("Claude Busy", "Wait for the current Claude run to finish before replying."),
                 ephemeral=True,
             )
             return
 
         if self.run_task and not self.run_task.done():
             await interaction.response.send_message(
-                embed=error_embed("Codex Busy", "A follow-up run is already starting."),
+                embed=error_embed("Claude Busy", "A follow-up run is already starting."),
                 ephemeral=True,
             )
             return
 
         await interaction.response.defer(ephemeral=True, thinking=False)
         follow_up_prompt = self._build_follow_up_prompt(reply_prompt)
-        self.cog._active_codex_sessions[self.owner.id] = self
-        self.cog._track_codex_session_task(self, self.start_run(follow_up_prompt))
-        await interaction.followup.send("Started follow-up Codex run.", ephemeral=True)
+        self.cog._active_claude_sessions[self.owner.id] = self
+        self.cog._track_claude_session_task(self, self.start_run(follow_up_prompt))
+        await interaction.followup.send("Started follow-up Claude run.", ephemeral=True)
 
-    @discord.ui.button(label="Reply to Codex", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Reply to Claude", style=discord.ButtonStyle.primary)
     async def reply_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(CodexReplyModal(self))
+        await interaction.response.send_modal(ClaudeReplyModal(self))
 
-    @discord.ui.button(label="Stop Codex", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="Stop Claude", style=discord.ButtonStyle.danger)
     async def stop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.finished or self.control is None:
             await interaction.response.send_message(
-                embed=info_embed("Codex Not Running", "There is no active Codex process to stop."),
+                embed=info_embed("Claude Not Running", "There is no active Claude process to stop."),
                 ephemeral=True,
             )
             return
@@ -246,7 +259,34 @@ class CodexSessionView(discord.ui.View):
         self.stop_requested = True
         await interaction.response.defer(ephemeral=True, thinking=False)
         await self.control.stop()
-        await interaction.followup.send("Stopping the active Codex run.", ephemeral=True)
+        await interaction.followup.send("Stopping the active Claude run.", ephemeral=True)
+
+    @discord.ui.button(label="Restart Bot", style=discord.ButtonStyle.secondary)
+    async def restart_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.finished:
+            await interaction.response.send_message(
+                embed=error_embed("Claude Running", "Wait for the Claude run to finish before restarting."),
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            embed=success_embed("Restarting", "Restarting bot with PM2..."),
+            ephemeral=True,
+        )
+        asyncio.create_task(self._pm2_restart())
+
+    async def _pm2_restart(self) -> None:
+        await asyncio.sleep(1.0)
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "pm2", "restart", "bot",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await process.communicate()
+        except Exception as exc:
+            logging.error("Failed to restart bot with pm2: %s", exc)
 
     async def on_timeout(self):
         if self.run_task and not self.run_task.done():
@@ -259,7 +299,7 @@ class Utility(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.start_time = start_time
-        self._active_codex_sessions: dict[int, CodexSessionView] = {}
+        self._active_claude_sessions: dict[int, ClaudeSessionView] = {}
 
     async def _send_partnership_log(self, ctx: commands.Context, target_channel, content: str, message_link: str = None, sent_message=None):
         settings = get_guild_settings(ctx.guild.id)
@@ -326,7 +366,7 @@ class Utility(commands.Cog):
             parts.append(f"<{display_name}>" if required else f"[{display_name}]")
         return " ".join(parts) if parts else "None"
 
-    def _track_codex_session_task(self, session_view: CodexSessionView, coro) -> None:
+    def _track_claude_session_task(self, session_view: ClaudeSessionView, coro) -> None:
         task = asyncio.create_task(coro)
         session_view.run_task = task
 
@@ -335,7 +375,7 @@ class Utility(commands.Cog):
                 exc = completed_task.exception()
                 if exc is not None:
                     logging.error(
-                        "Unhandled error in Codex session task",
+                        "Unhandled error in Claude session task",
                         exc_info=(type(exc), exc, exc.__traceback__),
                     )
 
@@ -587,8 +627,7 @@ class Utility(commands.Cog):
         embed.set_author(name=guild.name, icon_url=guild.icon.url if guild.icon else "")
         if guild.icon:
             embed.set_thumbnail(url=guild.icon.url)
-        if guild.banner:
-            embed.set_image(url=guild.banner.url)
+        embed.set_image(url="https://csrptickets-storage.s3.us-east-1.amazonaws.com/uploads/d3677056df674d708003f7642d17bd90.png")
         brand_footer(embed)
         await ctx.send(embed=embed)
 
@@ -823,21 +862,21 @@ class Utility(commands.Cog):
         brand_footer(embed)
         await ctx.send(embed=embed)
 
-    @commands.hybrid_command(name="codex", description="Run a Codex prompt from Discord.")
+    @commands.hybrid_command(name="claude", description="Run a Claude prompt from Discord.")
     @is_bot_dev()
-    @app_commands.describe(prompt="The prompt to send to Codex")
-    async def codex(self, ctx: commands.Context, *, prompt: str):
+    @app_commands.describe(prompt="The prompt to send to Claude")
+    async def claude(self, ctx: commands.Context, *, prompt: str):
         await ctx.defer()
-        active_session = self._active_codex_sessions.get(ctx.author.id)
+        active_session = self._active_claude_sessions.get(ctx.author.id)
         if active_session and not active_session.finished:
-            await ctx.send(embed=error_embed("Codex Busy", "You already have a Codex run in progress. Use the existing Stop button first."))
+            await ctx.send(embed=error_embed("Claude Busy", "You already have a Claude run in progress. Use the existing Stop button first."))
             return
 
-        session_view = CodexSessionView(self, ctx, prompt)
-        progress_message = await ctx.send(embed=session_view.build_embed(), view=session_view)
+        session_view = ClaudeSessionView(self, ctx, prompt)
+        progress_message = await ctx.send(embed=session_view.build_embed(), view=session_view, legacy_embeds=True)
         session_view.message = progress_message
-        self._active_codex_sessions[ctx.author.id] = session_view
-        self._track_codex_session_task(session_view, session_view.start_run(prompt))
+        self._active_claude_sessions[ctx.author.id] = session_view
+        self._track_claude_session_task(session_view, session_view.start_run(prompt))
 
     @commands.hybrid_command(name="sales", description="Get current group sales data.")
     @is_sales_authorized()

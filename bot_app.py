@@ -20,7 +20,7 @@ from config import (
     load_testing_users, save_testing_users,
 )
 from cogs.helpers import install_components_v2_transport
-from lib.codex_runner import run_codex_prompt
+from lib.claude_runner import run_claude_prompt
 
 TARGET_GUILD_ID = 965829463512330260
 
@@ -538,23 +538,23 @@ async def handle_console_command(command_line: str):
         await bot.close()
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
-    if command_name == "codex":
+    if command_name == "claude":
         if len(parts) < 2:
-            logging.error("Usage: /codex {prompt}")
+            logging.error("Usage: /claude {prompt}")
             return
 
         prompt = " ".join(parts[1:])
-        logging.info(f"Running Codex in {BASE_DIR} with prompt: {prompt}")
+        logging.info(f"Running Claude in {BASE_DIR} with prompt: {prompt}")
         try:
-            return_code, stdout, stderr = await run_codex_prompt(prompt)
+            return_code, stdout, stderr = await run_claude_prompt(prompt)
         except OSError as exc:
-            logging.error("Unable to launch Codex: %s", exc)
+            logging.error("Unable to launch Claude: %s", exc)
             return
         if stdout.strip():
-            logging.info("Codex stdout:\n%s", stdout.strip())
+            logging.info("Claude stdout:\n%s", stdout.strip())
         if stderr.strip():
-            logging.warning("Codex stderr:\n%s", stderr.strip())
-        logging.info("Codex exited with code %s", return_code)
+            logging.warning("Claude stderr:\n%s", stderr.strip())
+        logging.info("Claude exited with code %s", return_code)
         return
 
     guild = await _get_target_guild()

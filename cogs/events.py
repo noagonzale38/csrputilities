@@ -6,13 +6,22 @@ import json
 import logging
 import sentry_sdk
 import random
+import uuid
+import io
 from datetime import timedelta, datetime
+
+import asyncio
+import aiohttp
+import boto3
+from botocore.exceptions import ClientError
 
 from config import (
     SERVER_KEY, LOGGING_CHANNEL_ID, ERRORS_CHANNEL, MODERATION_ROLE_IDS,
     CHANNEL_ID, BAN_CHANNEL, LOG_SERVER_URL, LOG_SERVER_AUTH,
     LATENCY_API_URL, MOD_CHANNEL_ID, MOD_ROLE_ID,
     afk_file, CSRPUTILS_DEVS,
+    AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET_NAME, AWS_REGION,
+    BOT_ADMINISTRATION,
 )
 from cogs.helpers import (
     Colors, BLANK_COLOR, CSRP_ICON, CHECK, CROSS, PENDING, DEVELOPER,
@@ -335,6 +344,112 @@ class Events(commands.Cog):
     async def cog_unload(self):
         self.bot.tree.remove_command(self.report_ctx_menu.name, type=self.report_ctx_menu.type)
 
+    def _get_s3_client(self):
+        return boto3.client(
+            "s3",
+            region_name=AWS_REGION,
+            aws_access_key_id=AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+        )
+
+    async def _handle_s3_upload(self, message: discord.Message):
+        admin_role_ids = set(BOT_ADMINISTRATION)
+        user_role_ids = {role.id for role in message.author.roles}
+        if not (user_role_ids & admin_role_ids):
+            await message.reply(
+                embed=error_embed("Not Permitted", "You do not have permission to use this command."),
+                mention_author=False,
+            )
+            return
+
+        ref = message.reference
+        if not ref or not ref.message_id:
+            await message.reply(
+                embed=error_embed("No Reply", "You must reply to a message that contains an image."),
+                mention_author=False,
+            )
+            return
+
+        try:
+            target_message = await message.channel.fetch_message(ref.message_id)
+        except (discord.NotFound, discord.HTTPException):
+            await message.reply(
+                embed=error_embed("Fetch Failed", "Could not fetch the replied message."),
+                mention_author=False,
+            )
+            return
+
+        image_url = None
+        filename = None
+        for attachment in target_message.attachments:
+            if attachment.content_type and attachment.content_type.startswith("image/"):
+                image_url = attachment.url
+                filename = attachment.filename
+                break
+
+        if not image_url and target_message.embeds:
+            for embed in target_message.embeds:
+                if embed.image and embed.image.url:
+                    image_url = embed.image.url
+                    filename = image_url.split("/")[-1].split("?")[0] or "image.png"
+                    break
+                if embed.thumbnail and embed.thumbnail.url:
+                    image_url = embed.thumbnail.url
+                    filename = image_url.split("/")[-1].split("?")[0] or "image.png"
+                    break
+
+        if not image_url:
+            await message.reply(
+                embed=error_embed("No Image", "The replied message does not contain an image."),
+                mention_author=False,
+            )
+            return
+
+        ext = filename.rsplit(".", 1)[-1] if "." in filename else "png"
+        object_key = f"uploads/{uuid.uuid4().hex}.{ext}"
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(image_url) as resp:
+                    if resp.status != 200:
+                        await message.reply(
+                            embed=error_embed("Download Failed", "Failed to download the image from Discord."),
+                            mention_author=False,
+                        )
+                        return
+                    image_data = await resp.read()
+                    content_type = resp.headers.get("Content-Type", f"image/{ext}")
+        except Exception as e:
+            await message.reply(
+                embed=error_embed("Download Error", f"Error downloading image: `{e}`"),
+                mention_author=False,
+            )
+            return
+
+        try:
+            s3 = self._get_s3_client()
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: s3.put_object(
+                    Bucket=S3_BUCKET_NAME,
+                    Key=object_key,
+                    Body=image_data,
+                    ContentType=content_type,
+                ),
+            )
+        except ClientError as e:
+            await message.reply(
+                embed=error_embed("Upload Failed", f"S3 upload failed: `{e}`"),
+                mention_author=False,
+            )
+            return
+
+        object_url = f"https://{S3_BUCKET_NAME}.s3.{AWS_REGION}.amazonaws.com/{object_key}"
+        await message.reply(
+            embed=success_embed("S3 Upload Complete", f"**Object URL:**\n{object_url}"),
+            mention_author=False,
+        )
+
     @commands.Cog.listener()
     async def on_ready(self):
         logging.info(f"Logged in as {self.bot.user}.")
@@ -570,6 +685,9 @@ class Events(commands.Cog):
         if self.bot.user in message.mentions:
             if "prefix" in message.content.lower():
                 await message.channel.send(embed=info_embed("Bot Prefix", "My prefix is `?`."))
+
+            if "s3upload" in message.content.lower():
+                await self._handle_s3_upload(message)
 
     @commands.Cog.listener()
     async def on_guild_join(self, guild):

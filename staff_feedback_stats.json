@@ -1965,8 +1965,8 @@
                 "feedback_count": 2
             },
             "757981697995178106": {
-                "total_rating": 156,
-                "feedback_count": 18
+                "total_rating": 165,
+                "feedback_count": 19
             },
             "1169361690291359748": {
                 "total_rating": 20,
@@ -2065,8 +2065,8 @@
                 "feedback_count": 3
             },
             "1079042353660170391": {
-                "total_rating": 29,
-                "feedback_count": 4
+                "total_rating": 39,
+                "feedback_count": 5
             },
             "585992482030878723": {
                 "total_rating": 1,
@@ -2213,8 +2213,8 @@
                 "feedback_count": 2
             },
             "792312950559997973": {
-                "total_rating": 228,
-                "feedback_count": 29
+                "total_rating": 269,
+                "feedback_count": 34
             },
             "1294687552917344327": {
                 "total_rating": 2,
@@ -2381,8 +2381,8 @@
                 "feedback_count": 4
             },
             "656916744673296394": {
-                "total_rating": 40,
-                "feedback_count": 4
+                "total_rating": 60,
+                "feedback_count": 6
             },
             "1400691464224374795": {
                 "total_rating": 61,
@@ -2545,12 +2545,12 @@
                 "feedback_count": 3
             },
             "1383717448804470817": {
-                "total_rating": 40,
-                "feedback_count": 4
+                "total_rating": 50,
+                "feedback_count": 5
             },
             "726507399640252416": {
-                "total_rating": 68,
-                "feedback_count": 7
+                "total_rating": 69,
+                "feedback_count": 8
             },
             "1092489655888379915": {
                 "total_rating": 20,
@@ -2559,6 +2559,14 @@
             "985495677352181810": {
                 "total_rating": 3,
                 "feedback_count": 1
+            },
+            "1408115251760595024": {
+                "total_rating": 1,
+                "feedback_count": 1
+            },
+            "1270846943001575498": {
+                "total_rating": 20,
+                "feedback_count": 2
             }
         },
         "entries": {
@@ -24041,6 +24049,62 @@
             "1511481050390597842": {
                 "staff_user_id": "1213915425369227334",
                 "rating": 9
+            },
+            "1512109630166138990": {
+                "staff_user_id": "792312950559997973",
+                "rating": 10
+            },
+            "1512451930939588629": {
+                "staff_user_id": "656916744673296394",
+                "rating": 10
+            },
+            "1512989774644908133": {
+                "staff_user_id": "792312950559997973",
+                "rating": 10
+            },
+            "1512990861590532106": {
+                "staff_user_id": "792312950559997973",
+                "rating": 10
+            },
+            "1513561323974299741": {
+                "staff_user_id": "1383717448804470817",
+                "rating": 10
+            },
+            "1513942708522062004": {
+                "staff_user_id": "726507399640252416",
+                "rating": 1
+            },
+            "1513943633966010389": {
+                "staff_user_id": "792312950559997973",
+                "rating": 1
+            },
+            "1514287388573302904": {
+                "staff_user_id": "1408115251760595024",
+                "rating": 1
+            },
+            "1514971089606803547": {
+                "staff_user_id": "757981697995178106",
+                "rating": 9
+            },
+            "1515106834711711754": {
+                "staff_user_id": "656916744673296394",
+                "rating": 10
+            },
+            "1515549212236972145": {
+                "staff_user_id": "792312950559997973",
+                "rating": 10
+            },
+            "1515701216993214766": {
+                "staff_user_id": "1079042353660170391",
+                "rating": 10
+            },
+            "1515726485288128613": {
+                "staff_user_id": "1270846943001575498",
+                "rating": 10
+            },
+            "1515739146608443482": {
+                "staff_user_id": "1270846943001575498",
+                "rating": 10
             }
         }
     }

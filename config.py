@@ -21,6 +21,11 @@ ERM_API_AUTH = os.getenv("ERM_API_AUTH")
 IS_TESTING = os.getenv("IS_TESTING", "false").lower() == "true"
 BOT_OWNER_ID = 1213915425369227334
 
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+
 SENTRY_ORG = "csrp-utilities"
 SENTRY_PROJECT = "csrp-utilities"
 
