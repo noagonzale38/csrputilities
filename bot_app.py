@@ -449,6 +449,7 @@ COGS = [
     "cogs.events",
     "cogs.settings",
     "cogs.staffmgmt",
+    "cogs.punishments",
 ]
 
 

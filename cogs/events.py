@@ -21,7 +21,7 @@ from config import (
     LATENCY_API_URL, MOD_CHANNEL_ID, MOD_ROLE_ID,
     afk_file, CSRPUTILS_DEVS,
     AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET_NAME, AWS_REGION,
-    BOT_ADMINISTRATION,
+    BOT_ADMINISTRATION, STAFF_FEEDBACK_CHANNEL,
 )
 from cogs.helpers import (
     Colors, BLANK_COLOR, CSRP_ICON, CHECK, CROSS, PENDING, DEVELOPER,
@@ -642,10 +642,45 @@ class Events(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message):
+        TICKET_CATEGORY_ID = 1176986720772833421
         if message.author.bot:
+            if (
+                message.channel.category_id == TICKET_CATEGORY_ID
+                and message.embeds
+            ):
+                for embed in message.embeds:
+                    text_to_check = " ".join(filter(None, [
+                        embed.description or "",
+                        embed.title or "",
+                        " ".join(f.value for f in embed.fields if f.value),
+                    ])).lower()
+                    fastpass_keywords = ["fast pass", "fastpass", "quick pass", "quickpass", "transfer"]
+                    if any(keyword in text_to_check for keyword in fastpass_keywords):
+                        await message.channel.send(
+                            "<:CSRP:1170178385595609158> **| FastPass/Transfers**\n"
+                            "In order to better assist you, please provide the following:\n"
+                            "- Your timezone\n"
+                            "- Link to the server you are transferring from\n"
+                            "- Proof of your roles there"
+                        )
+                        try:
+                            await message.channel.edit(name="⚪-ia")
+                        except (discord.Forbidden, discord.HTTPException):
+                            pass
+                        break
             return
 
         ctx = await self.bot.get_context(message)
+
+        if message.channel.id == STAFF_FEEDBACK_CHANNEL:
+            is_feedback_cmd = ctx.valid and ctx.command and ctx.command.qualified_name == "staff_feedback"
+            if not is_feedback_cmd:
+                try:
+                    await message.delete()
+                except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+                    pass
+                return
+
         invoked_afk_command = bool(ctx.valid and ctx.command and ctx.command.qualified_name == "afk")
 
         afk_data = load_afk()

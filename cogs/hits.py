@@ -280,6 +280,66 @@ async def refresh_hostage_sticky_message(channel: discord.TextChannel) -> None:
     update_guild_setting(guild.id, "hostage_sticky_message_id", message.id)
 
 
+PARTNERSHIP_CHANNEL_ID = 1438594753640927323
+
+
+def _build_partnership_sticky_embed(guild: discord.Guild) -> discord.Embed:
+    embed = discord.Embed(
+        title="⚠️ Partnership Proof Requirements",
+        description=(
+            "## ❗ Important — Read Before Submitting\n\n"
+            "**Your image must be proof of you making the ticket in a __different server__ "
+            "and asking for a partnership.**\n\n"
+            ">>> \U0001f4cb **What your proof needs to show:**\n"
+            "- A screenshot of the **ticket you created** in the other server\n"
+            "- The ticket must clearly show you **requesting a partnership**\n"
+            "- The server must be **different from this one**\n\n"
+            "❌ **The following will NOT be accepted:**\n"
+            "- Screenshots of DMs\n"
+            "- Screenshots from this server\n"
+            "- Images that do not show a ticket or partnership request"
+        ),
+        color=0xFFA500,
+    )
+    embed.set_author(name=guild.name, icon_url=guild.icon.url if guild.icon else "")
+    brand_footer(embed)
+    return embed
+
+
+async def ensure_partnership_sticky_message(bot) -> None:
+    channel = bot.get_channel(PARTNERSHIP_CHANNEL_ID)
+    if channel is None:
+        return
+
+    guild = channel.guild
+    settings = get_guild_settings(guild.id)
+    sticky_message_id = settings.get("partnership_sticky_message_id")
+    if sticky_message_id:
+        with contextlib.suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
+            await channel.fetch_message(int(sticky_message_id))
+            return
+
+    message = await channel.send(embed=_build_partnership_sticky_embed(guild))
+    update_guild_setting(guild.id, "partnership_sticky_message_id", message.id)
+
+
+async def refresh_partnership_sticky_message(bot) -> None:
+    channel = bot.get_channel(PARTNERSHIP_CHANNEL_ID)
+    if channel is None:
+        return
+
+    guild = channel.guild
+    settings = get_guild_settings(guild.id)
+    sticky_message_id = settings.get("partnership_sticky_message_id")
+    if sticky_message_id:
+        with contextlib.suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
+            old_message = await channel.fetch_message(int(sticky_message_id))
+            await old_message.delete()
+
+    message = await channel.send(embed=_build_partnership_sticky_embed(guild))
+    update_guild_setting(guild.id, "partnership_sticky_message_id", message.id)
+
+
 class DenyHitModal(discord.ui.Modal, title="Deny Hit"):
     reason = ui.TextInput(label="Reason", placeholder="Reason for denying the hit", required=True)
 
@@ -582,11 +642,21 @@ class Hits(commands.Cog):
             if channel is not None:
                 await ensure_hostage_sticky_message(channel)
 
+        await ensure_partnership_sticky_message(self.bot)
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild:
             return
 
+        # Partnership channel sticky
+        if message.channel.id == PARTNERSHIP_CHANNEL_ID:
+            settings = get_guild_settings(message.guild.id)
+            if settings.get("partnership_sticky_message_id") != message.id:
+                await refresh_partnership_sticky_message(self.bot)
+            return
+
+        # Hostage review channel sticky
         settings = get_guild_settings(message.guild.id)
         review_channel_id = settings.get("hostage_review_channel")
         if not review_channel_id or message.channel.id != int(review_channel_id):
@@ -635,6 +705,7 @@ class Hits(commands.Cog):
             await ctx.send(embed=error_embed("Blacklisted", "You are blacklisted from placing hits."))
             return
 
+        bounty = bounty.lstrip("$")
         if not bounty.isdigit() or int(bounty) <= 0:
             await ctx.send(embed=error_embed("Invalid Bounty", "Bounty must be a positive number."))
             return

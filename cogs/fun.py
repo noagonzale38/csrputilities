@@ -249,6 +249,25 @@ class Fun(commands.Cog):
     async def afk(self, ctx, *, reason: str = "AFK"):
         afk_data = load_afk()
         user_id = str(ctx.author.id)
+
+        if user_id in afk_data:
+            old_nick = afk_data[user_id].get("name", ctx.author.display_name)
+            del afk_data[user_id]
+            save_afk(afk_data)
+            try:
+                await ctx.author.edit(nick=old_nick)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            embed = discord.Embed(
+                title="No Longer AFK",
+                description=f"{ctx.author.mention} is no longer AFK.",
+                color=BLANK_COLOR,
+            )
+            embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else "")
+            brand_footer(embed)
+            await ctx.send(embed=embed)
+            return
+
         afk_data[user_id] = {"reason": reason, "name": ctx.author.display_name}
         save_afk(afk_data)
         try:

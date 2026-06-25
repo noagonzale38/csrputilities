@@ -123,8 +123,12 @@ class ClaudeSessionView(discord.ui.View):
         if self.latest_stdout.strip():
             preview = _sanitize_codeblock(_truncate_tail(self.latest_stdout, CLAUDE_PREVIEW_LIMIT))
             summary.append(f"**Stdout Preview:**\n```\n{preview}\n```")
-        if self.latest_stderr.strip():
-            preview = _sanitize_codeblock(_truncate_tail(self.latest_stderr, CLAUDE_PREVIEW_LIMIT))
+        filtered_stderr = "\n".join(
+            line for line in self.latest_stderr.splitlines()
+            if "no stdin data received" not in line
+        )
+        if filtered_stderr.strip():
+            preview = _sanitize_codeblock(_truncate_tail(filtered_stderr, CLAUDE_PREVIEW_LIMIT))
             summary.append(f"**Stderr Preview:**\n```\n{preview}\n```")
         if self.last_error:
             summary.append(f"> **Error:** `{self.last_error[:300]}`")
@@ -151,7 +155,7 @@ class ClaudeSessionView(discord.ui.View):
         if not self.message:
             return
         try:
-            await self.message.edit(embed=self.build_embed(), view=self, legacy_embeds=True)
+            await self.message.edit(embed=self.build_embed(), view=self)
         except discord.HTTPException as exc:
             logging.warning("Failed to update Claude session embed: %s", exc)
 
@@ -169,9 +173,7 @@ class ClaudeSessionView(discord.ui.View):
     async def _send_output_file(self) -> None:
         output_sections = []
         if self.latest_stdout.strip():
-            output_sections.append(f"STDOUT\n{'=' * 6}\n{self.latest_stdout.strip()}")
-        if self.latest_stderr.strip():
-            output_sections.append(f"STDERR\n{'=' * 6}\n{self.latest_stderr.strip()}")
+            output_sections.append(self.latest_stdout.strip())
         if self.last_error:
             output_sections.append(f"ERROR\n{'=' * 5}\n{self.last_error}")
 
@@ -627,7 +629,6 @@ class Utility(commands.Cog):
         embed.set_author(name=guild.name, icon_url=guild.icon.url if guild.icon else "")
         if guild.icon:
             embed.set_thumbnail(url=guild.icon.url)
-        embed.set_image(url="https://csrptickets-storage.s3.us-east-1.amazonaws.com/uploads/d3677056df674d708003f7642d17bd90.png")
         brand_footer(embed)
         await ctx.send(embed=embed)
 
@@ -743,16 +744,20 @@ class Utility(commands.Cog):
     @app_commands.describe(message="The message to repeat.")
     async def say(self, ctx, *, message: str):
         channel = ctx.channel
-        permissions = channel.permissions_for(ctx.guild.me)
-        if ctx.message and permissions.manage_messages:
-            try:
-                await ctx.message.delete()
-            except (discord.NotFound, discord.Forbidden):
-                pass
         allowed_mentions = None
         if not member_has_rank_or_higher(ctx.author, "Internal Affairs"):
             allowed_mentions = discord.AllowedMentions(users=True, roles=False, everyone=False)
-        await ctx.send(message, allowed_mentions=allowed_mentions)
+        if ctx.interaction:
+            await ctx.interaction.response.send_message("Done!", ephemeral=True)
+            await channel.send(message, allowed_mentions=allowed_mentions)
+        else:
+            permissions = channel.permissions_for(ctx.guild.me)
+            if permissions.manage_messages:
+                try:
+                    await ctx.message.delete()
+                except (discord.NotFound, discord.Forbidden):
+                    pass
+            await channel.send(message, allowed_mentions=allowed_mentions)
 
     @app_commands.command(name="convert", description="Convert a video to mp4.")
     @app_commands.describe(file="The file to convert")
@@ -927,8 +932,9 @@ class Utility(commands.Cog):
 
         async def _fetch_issues(eid):
             url = "https://sentry.io/api/0/projects/csrp-devteam/csrp-utilities/issues/"
+            params = f"?query=error_id:{eid}"
             try:
-                status, data = await api_get(url, headers={**api_headers, "Content-Type": "application/json"})
+                status, data = await api_get(url + params, headers={**api_headers, "Content-Type": "application/json"})
                 return data if status == 200 else None
             except Exception:
                 return None

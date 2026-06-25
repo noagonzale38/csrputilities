@@ -433,6 +433,7 @@ def install_components_v2_transport() -> None:
     original_interaction_edit = discord.InteractionResponse.edit_message
     original_edit_original_response = discord.Interaction.edit_original_response
     original_webhook_send = discord.Webhook.send
+    original_webhook_message_edit = discord.WebhookMessage.edit
 
     async def patched_messageable_send(self, *args, **kwargs):
         normalized_args, normalized_kwargs = _normalize_message_content(args, kwargs)
@@ -487,6 +488,8 @@ def install_components_v2_transport() -> None:
         return await original_interaction_edit(self, *args, **prepared)
 
     async def patched_edit_original_response(self, *args, **kwargs):
+        from discord.utils import MISSING
+        kwargs = {k: v for k, v in kwargs.items() if v is not MISSING}
         prepared, _ = _prepare_components_v2_kwargs(kwargs, editing=True)
         return await original_edit_original_response(self, *args, **prepared)
 
@@ -494,6 +497,14 @@ def install_components_v2_transport() -> None:
         normalized_args, normalized_kwargs = _normalize_message_content(args, kwargs)
         prepared, _ = _prepare_components_v2_kwargs(normalized_kwargs, editing=False)
         return await original_webhook_send(self, *normalized_args, **prepared)
+
+    async def patched_webhook_message_edit(self, *args, **kwargs):
+        prepared, legacy_view = _prepare_components_v2_kwargs(kwargs, editing=True)
+        if legacy_view is not None and hasattr(legacy_view, "message"):
+            legacy_view.message = self
+        if "view" in prepared and hasattr(prepared["view"], "message"):
+            prepared["view"].message = self
+        return await original_webhook_message_edit(self, *args, **prepared)
 
     Messageable.send = patched_messageable_send
     commands.Context.send = patched_context_send
@@ -503,6 +514,7 @@ def install_components_v2_transport() -> None:
     discord.InteractionResponse.edit_message = patched_interaction_edit
     discord.Interaction.edit_original_response = patched_edit_original_response
     discord.Webhook.send = patched_webhook_send
+    discord.WebhookMessage.edit = patched_webhook_message_edit
     setattr(discord, _INSTALL_FLAG, True)
 
 

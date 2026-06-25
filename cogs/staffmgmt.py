@@ -1008,6 +1008,69 @@ class StaffManagement(commands.Cog):
                 view=None,
             )
 
+    @commands.hybrid_command(name="remove_feedback_blacklist", description="Removes a user from the staff feedback blacklist.")
+    @app_commands.describe(user="The user to remove from the feedback blacklist")
+    async def remove_feedback_blacklist(self, ctx: commands.Context, user: discord.Member):
+        if ctx.guild is None:
+            await ctx.send(embed=error_embed("Server Only", "This command can only be used in a server."))
+            return
+
+        if not member_has_rank_or_higher(ctx.author, "Internal Affairs"):
+            await ctx.send(
+                embed=error_embed("Insufficient Permissions", "You must be **Internal Affairs** or higher to use this command."),
+                ephemeral=True,
+            )
+            return
+
+        blacklisted_user_ids = load_feedback_blacklist()
+        if user.id not in blacklisted_user_ids:
+            await ctx.send(
+                embed=warning_embed("Not Blacklisted", f"{user.mention} is not currently blacklisted from sending staff feedback."),
+                ephemeral=True,
+            )
+            return
+
+        view = ConfirmView(ctx.author, timeout=15)
+        embed = discord.Embed(
+            title="Confirm Feedback Unblacklist",
+            description=(
+                f"Are you sure you want to remove **{user.display_name}** from the feedback blacklist?\n\n"
+                f"> **Requested By:** {ctx.author.mention}\n"
+                f"> **Target:** {user.mention}"
+            ),
+            color=BLANK_COLOR,
+        )
+        embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else "")
+        brand_footer(embed)
+        msg = await ctx.send(embed=embed, view=view)
+        view.message = msg
+        await view.wait()
+
+        if view.value:
+            try:
+                with open(feedback_blacklists, "r") as file:
+                    lines = file.readlines()
+                with open(feedback_blacklists, "w") as file:
+                    for line in lines:
+                        if f"{{userid: {user.id}}}" not in line:
+                            file.write(line)
+            except FileNotFoundError:
+                pass
+            await msg.edit(
+                embed=success_embed("User Removed", f"**{user.name}** has been removed from the feedback blacklist."),
+                view=None,
+            )
+        elif view.value is False:
+            await msg.edit(
+                embed=discord.Embed(title="Action Cancelled", description="The action has been cancelled.", color=BLANK_COLOR),
+                view=None,
+            )
+        else:
+            await msg.edit(
+                embed=discord.Embed(title="Action Timed Out", description="The action has timed out.", color=BLANK_COLOR),
+                view=None,
+            )
+
     @commands.hybrid_command(name="feedbacksync", description="Sync the full staff feedback channel history into the cache.")
     @is_bot_dev()
     async def feedbacksync(self, ctx: commands.Context):

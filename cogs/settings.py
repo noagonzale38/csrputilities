@@ -124,6 +124,7 @@ DEFAULT_SETTINGS = {
     "retirement_log_channel": None,
     "hostage_review_channel": None,
     "hostage_sticky_message_id": None,
+    "partnership_sticky_message_id": None,
     "discord_checks_enabled": True,
     "feedback_enabled": False,
     "feedback_questions": ["Why did you decide to leave?"],

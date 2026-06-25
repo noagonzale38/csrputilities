@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import threading
 import uuid
+from datetime import timedelta
 from functools import wraps
 from pathlib import Path
 
@@ -71,6 +72,7 @@ INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY")
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = os.getenv("DASHBOARD_SECRET_KEY", "change-me-dashboard-secret")
 app.config["SESSION_COOKIE_NAME"] = "csrp_dashboard_session"
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=14)
 CORS(app)
 
 _bot_provider = None
@@ -632,6 +634,7 @@ def auth_callback():
         return redirect(url_for("index"))
 
     user = user_response.json()
+    session.permanent = True
     session["discord_user_id"] = int(user["id"])
     session["discord_username"] = user.get("username", "Discord User")
 
