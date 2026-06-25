@@ -48,14 +48,18 @@ casefile.txt
 received_logs.txt
 report_blacklists.txt
 afk.json
+dashboard_erlc_actions.json
 dashboard_permissions.json
 dashboard_evidence_logs.json
 dashboard_evidence_uploads/
+data.json
 embed_messages.json
 guild_settings.json
 hits.json
 modlogs.json
 retirements.json
+ship_stats.json
+staff_feedback_stats.json
 testing_users.json
 
 # Accidental version-marker files
