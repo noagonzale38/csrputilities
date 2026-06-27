@@ -138,6 +138,7 @@ DEFAULT_SETTINGS = {
         "Management": None,
         "Internal Affairs Supervisor": None,
         "Internal Affairs": None,
+        "Trial Internal Affairs": None,
         "Senior Admin": None,
         "Admin": None,
         "Junior Admin": None,

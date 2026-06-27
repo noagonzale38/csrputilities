@@ -24,6 +24,7 @@ BASE_ROLE_BY_RANK = {
     "Internal Affairs Supervisor": 1137119576514105404,
     "Internal Affairs": 1137119576514105404,
     "Senior Admin": 968848542347173908,
+    "Trial Internal Affairs": 1137119576514105404,
     "Admin": 968848542347173908,
     "Junior Admin": 968848542347173908,
     "Senior Moderator": 968851098221813770,
@@ -34,7 +35,10 @@ EXTRA_ROLE_IDS_BY_RANK = {
     "Management": [1157648329619021844],
     "Internal Affairs Supervisor": [1137117556348567614],
     "Internal Affairs": [1137117556348567614],
+    "Trial Internal Affairs": [1137117556348567614],
 }
+
+MANAGE_MINIMUM_RANK = {}
 
 DEMOTION_MAP = {}
 for i in range(len(RANK_ORDER) - 1):
@@ -432,7 +436,13 @@ def _can_manage_rank(actor_rank: Optional[str], target_rank: Optional[str]) -> b
         return True
     if actor_rank is None or actor_rank not in RANK_ORDER:
         return False
-    return RANK_ORDER.index(actor_rank) < RANK_ORDER.index(target_rank)
+    if RANK_ORDER.index(actor_rank) >= RANK_ORDER.index(target_rank):
+        return False
+    required_rank = MANAGE_MINIMUM_RANK.get(target_rank)
+    if required_rank and required_rank in RANK_ORDER:
+        if RANK_ORDER.index(actor_rank) > RANK_ORDER.index(required_rank):
+            return False
+    return True
 
 
 def _rank_related_role_ids(settings: dict, rank: str) -> set[int]:

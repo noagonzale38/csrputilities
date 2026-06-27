@@ -450,6 +450,7 @@ COGS = [
     "cogs.settings",
     "cogs.staffmgmt",
     "cogs.punishments",
+    "cogs.on_command_error",
 ]
 
 

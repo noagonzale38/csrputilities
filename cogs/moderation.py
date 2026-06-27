@@ -37,6 +37,7 @@ ACTION_NORMALIZATION = {
     "warning": "Warning",
     "kick": "Kick",
     "ban": "Ban",
+    "softban": "Softban",
     "unban": "Unban",
     "mute": "Mute",
     "unmute": "Unmute",
@@ -637,6 +638,97 @@ class Moderation(commands.Cog):
         banned_user_tag = user_tag(member_to_ban, fallback_name="unknown-user") if member_to_ban else f"`@unknown-user | {user_id}`"
         embed = discord.Embed(
             title="User Banned",
+            description=embed_description(
+                (
+                    f"> **Staff Member:** {user_tag(ctx.author)}\n"
+                    f"> **User:** {banned_user_tag}\n"
+                    f"> **Case:** `#{case}`"
+                ),
+                other_info,
+            ),
+            color=BLANK_COLOR,
+        )
+        embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else "")
+        if member_to_ban and hasattr(member_to_ban, 'display_avatar'):
+            embed.set_thumbnail(url=member_to_ban.display_avatar.url)
+        brand_footer(embed)
+        await ctx.send(embed=embed)
+
+    @commands.hybrid_command(name="softban", description="Softbans a user (bans and immediately unbans to delete messages).")
+    @is_role_authorized()
+    @app_commands.describe(user="The user to softban", reason="The reason for softbanning the user")
+    async def softban(self, ctx, user, *, reason: str):
+        reason, ignore_restrictions = await self._resolve_restriction_bypass(ctx, reason)
+        if reason is None:
+            return
+        if not reason:
+            await ctx.send(embed=error_embed("Missing Reason", "Please provide a reason for the softban."))
+            return
+
+        user_id = None
+
+        if isinstance(user, discord.Member):
+            if not ignore_restrictions and self._is_protected_moderator(user):
+                await ctx.send(embed=error_embed("Cannot Softban User", "I cannot softban other moderators or administrators."))
+                return
+            member_to_ban = user
+            user_id = user.id
+        else:
+            try:
+                cleaned = str(user).strip("<@!>")
+                user_id = int(cleaned)
+            except ValueError:
+                await ctx.send(embed=error_embed("Invalid User ID", "The provided user ID is not valid."))
+                return
+
+            try:
+                member_to_ban = await ctx.guild.fetch_member(user_id)
+                if not ignore_restrictions and self._is_protected_moderator(member_to_ban):
+                    await ctx.send(embed=error_embed("Cannot Softban User", "I cannot softban other moderators or administrators."))
+                    return
+            except discord.NotFound:
+                member_to_ban = None
+
+        case = get_next_case()
+        softban_message = f"**Case #{case}** — You have been softbanned from California State Roleplay for: {reason}."
+
+        dm_failed = False
+        if member_to_ban:
+            try:
+                dm = await member_to_ban.create_dm()
+                await dm.send(softban_message)
+            except (discord.Forbidden, discord.HTTPException):
+                dm_failed = True
+            await member_to_ban.ban(reason=f"Softban: {reason}", delete_message_days=7)
+        else:
+            try:
+                await ctx.guild.ban(discord.Object(id=user_id), reason=f"Softban: {reason}", delete_message_days=7)
+            except discord.Forbidden:
+                await ctx.send(embed=error_embed("Missing Permissions", "I don't have permission to ban this user."))
+                return
+
+        try:
+            await ctx.guild.unban(discord.Object(id=user_id), reason=f"Softban unban: {reason}")
+        except discord.HTTPException:
+            pass
+
+        save_modlog(user_id, "Softban", reason, ctx.author.id, case)
+
+        if ctx.message:
+            try:
+                await ctx.message.delete()
+            except (discord.NotFound, discord.Forbidden):
+                pass
+
+        other_info = (
+            f"> **Reason:** {reason}\n"
+            f"> **Date:** <t:{int(time.time())}:f>"
+        )
+        if dm_failed:
+            other_info += "\n> **Note:** Could not DM the user"
+        banned_user_tag = user_tag(member_to_ban, fallback_name="unknown-user") if member_to_ban else f"`@unknown-user | {user_id}`"
+        embed = discord.Embed(
+            title="User Softbanned",
             description=embed_description(
                 (
                     f"> **Staff Member:** {user_tag(ctx.author)}\n"
