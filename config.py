@@ -11,6 +11,7 @@ load_dotenv(dotenv_path=BASE_DIR / ".env")
 
 TOKEN = os.getenv("BOT_TOKEN")
 SERVER_KEY = os.getenv("SERVER_KEY")
+TEST_SERVER_KEY = os.getenv("TEST_SERVER_KEY")
 SENTRY_API_TOKEN = os.getenv("SENTRY_API_TOKEN")
 SENTRY_DSN = os.getenv("SENTRY_DSN")
 SENTRY_API_KEY = os.getenv("SENTRY_API_KEY")
@@ -20,6 +21,7 @@ COOKIE_API_AUTH = os.getenv("COOKIE_API_AUTH")
 ERM_API_AUTH = os.getenv("ERM_API_AUTH")
 IS_TESTING = os.getenv("IS_TESTING", "false").lower() == "true"
 BOT_OWNER_ID = 1213915425369227334
+RESTRICTION_BYPASS_USER_IDS = {BOT_OWNER_ID, 856914957764526111}
 
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
@@ -95,6 +97,7 @@ SESSION_CHANNEL = 1159839282635227286
 ERRORS_CHANNEL = 1323534295108812817
 STAFF_FEEDBACK_CHANNEL = 1168268985918300250
 INFRACTION_CHANNEL = 1160348145989988535
+APPEALS_CHANNEL_ID = 1328489653539438756
 MOD_CHANNEL_ID = 1216491894390001674
 MOD_ROLE_ID = 1340104462680719431
 REPORT_GUILD_ID = 965829463512330260
@@ -118,6 +121,32 @@ HEADERS = {
     "Content-Type": "application/json",
     "Server-Key": SERVER_KEY,
 }
+
+KEY_HEADERS = {"Server-Key": SERVER_KEY}
+
+
+# --- PRC API key switching (dev only) ---
+# HEADERS / KEY_HEADERS are shared dicts; set_api_mode swaps the key in place
+# so every module that imported them picks up the change immediately.
+
+_api_mode = "prod"
+
+def get_api_mode():
+    return _api_mode
+
+def get_server_key():
+    return TEST_SERVER_KEY if _api_mode == "test" else SERVER_KEY
+
+def set_api_mode(mode):
+    global _api_mode
+    if mode not in ("prod", "test"):
+        raise ValueError("API mode must be 'prod' or 'test'.")
+    if mode == "test" and not TEST_SERVER_KEY:
+        raise ValueError("TEST_SERVER_KEY is not set in .env.")
+    _api_mode = mode
+    key = TEST_SERVER_KEY if mode == "test" else SERVER_KEY
+    HEADERS["Server-Key"] = key
+    KEY_HEADERS["Server-Key"] = key
 
 WARNING_1_ROLE_ID = 1191743191163080715
 WARNING_2_ROLE_ID = 1191743212990251098

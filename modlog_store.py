@@ -286,6 +286,40 @@ def get_modlogs_for_user(user_id: int) -> list[dict[str, Any]]:
             connection.close()
 
 
+def get_modlog_by_case(case_id: int) -> dict[str, Any] | None:
+    _initialize_database()
+    with _DB_LOCK:
+        connection = _connect()
+        try:
+            row = connection.execute(
+                """
+                SELECT user_id, action, reason, moderator_id, case_id, timestamp
+                FROM modlogs
+                WHERE case_id = ?
+                  AND action NOT LIKE ?
+                """,
+                (int(case_id), f"{INFRACTION_ACTION_PREFIX}%"),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            connection.close()
+
+
+def delete_modlog_by_case(case_id: int) -> bool:
+    _initialize_database()
+    with _DB_LOCK:
+        connection = _connect()
+        try:
+            cursor = connection.execute(
+                "DELETE FROM modlogs WHERE case_id = ? AND action NOT LIKE ?",
+                (int(case_id), f"{INFRACTION_ACTION_PREFIX}%"),
+            )
+            connection.commit()
+            return cursor.rowcount > 0
+        finally:
+            connection.close()
+
+
 def count_modlogs() -> int:
     _initialize_database()
     with _DB_LOCK:

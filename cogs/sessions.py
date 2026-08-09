@@ -4,7 +4,7 @@ import asyncio
 import time
 
 from config import (
-    SERVER_KEY, CHANNEL_ID, SESSION_CHANNEL,
+    KEY_HEADERS, CHANNEL_ID, SESSION_CHANNEL,
     is_role_authorized, is_session_permitted,
 )
 from cogs.helpers import (
@@ -123,7 +123,7 @@ def _session_buttons():
 
 async def _get_player_count():
     try:
-        status, data = await api_get(f"https://api.erlc.gg/v1/server", headers={"Server-Key": SERVER_KEY})
+        status, data = await api_get(f"https://api.erlc.gg/v1/server", headers=KEY_HEADERS)
         if status == 200 and data:
             return data.get("CurrentPlayers", 0)
     except Exception:
@@ -133,7 +133,7 @@ async def _get_player_count():
 
 async def _get_staff_count():
     try:
-        status, data = await api_get(f"https://api.erlc.gg/v1/server/players", headers={"Server-Key": SERVER_KEY})
+        status, data = await api_get(f"https://api.erlc.gg/v1/server/players", headers=KEY_HEADERS)
         if status == 200 and isinstance(data, list):
             return sum(1 for p in data if isinstance(p, dict) and p.get("Permission") in ["Server Administrator", "Server Moderator"])
     except Exception:
@@ -143,7 +143,7 @@ async def _get_staff_count():
 
 async def _get_queue_count():
     try:
-        status, data = await api_get(f"https://api.erlc.gg/v1/server/queue", headers={"Server-Key": SERVER_KEY})
+        status, data = await api_get(f"https://api.erlc.gg/v1/server/queue", headers=KEY_HEADERS)
         if status == 200 and isinstance(data, list):
             return len(data)
     except Exception:
@@ -243,7 +243,7 @@ class Sessions(commands.Cog):
         try:
             status, data = await api_get(
                 "https://api.erlc.gg/v1/server/players",
-                headers={"Server-Key": SERVER_KEY},
+                headers=KEY_HEADERS,
             )
             if status != 200 or not isinstance(data, list):
                 return

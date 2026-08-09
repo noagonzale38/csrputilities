@@ -5,10 +5,11 @@ from discord import app_commands
 from config import (
     blacklisted_command, report_blacklists, SECRET_USER_ID,
     is_bot_dev, is_noah_or_directive,
+    get_api_mode, set_api_mode,
 )
 from cogs.helpers import (
     Colors, BLANK_COLOR, CROSS, PENDING, CSRP_ICON,
-    success_embed, error_embed, brand_footer,
+    success_embed, error_embed, info_embed, brand_footer,
     ConfirmView,
 )
 
@@ -45,6 +46,38 @@ class Admin(commands.Cog):
             await ctx.reply(embed=success_embed("Command Executed", "Command executed successfully."), mention_author=False)
         except discord.Forbidden:
             await ctx.reply(embed=error_embed("DM Failed", "Could not send a DM."), mention_author=False)
+
+    @commands.command(name="switchapi", description="Switch the PRC API key between prod and test.")
+    @is_bot_dev()
+    async def switchapi(self, ctx, mode: str = None):
+        if mode is None or mode.lower() not in ("prod", "test"):
+            await ctx.reply(
+                embed=error_embed(
+                    "Invalid Mode",
+                    f"Usage: `-switchapi <prod|test>`\n\n> **Current Mode:** `{get_api_mode()}`",
+                ),
+                mention_author=False,
+            )
+            return
+
+        mode = mode.lower()
+        if mode == get_api_mode():
+            await ctx.reply(
+                embed=info_embed("No Change", f"The PRC API is already using the **{mode}** key."),
+                mention_author=False,
+            )
+            return
+
+        try:
+            set_api_mode(mode)
+        except ValueError as e:
+            await ctx.reply(embed=error_embed("Switch Failed", str(e)), mention_author=False)
+            return
+
+        await ctx.reply(
+            embed=success_embed("API Key Switched", f"The PRC API is now using the **{mode}** key."),
+            mention_author=False,
+        )
 
     @commands.hybrid_command(name="command_blacklist", description="Blacklists a user from using ERLC commands.")
     @is_bot_dev()

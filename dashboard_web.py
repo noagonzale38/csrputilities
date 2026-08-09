@@ -1,4 +1,6 @@
 import asyncio
+import json
+import logging
 import os
 import shutil
 import subprocess
@@ -63,6 +65,7 @@ from dashboard_actions import (
     update_dashboard_settings,
 )
 from dashboard_permissions import FEATURES, load_permissions, member_has_access, update_permission
+from lib.prc_webhook import verify_prc_signature
 from dashboard_themes import create_theme, install_theme, list_public_themes, list_user_themes, uninstall_theme
 
 LOG_FILE = "logs.txt"
@@ -999,6 +1002,40 @@ def get_server_latency():
     if not authenticate():
         return jsonify({"error": "Unauthorized"}), 401
     return jsonify({"latency": get_latency()}), 200
+
+
+@app.route("/webhooks/erlc", methods=["POST"])
+def erlc_event_webhook():
+    """Receive PRC Event Webhooks (in-game `;` messages, emergency calls).
+
+    PRC requires Ed25519 verification over `timestamp + raw_body`; return 2xx
+    only when the signature is valid, 4xx otherwise.
+    """
+    raw_body = request.get_data(cache=True)
+    timestamp = request.headers.get("X-Signature-Timestamp")
+    signature = request.headers.get("X-Signature-Ed25519")
+
+    if not timestamp or not signature:
+        return jsonify({"error": "Missing signature headers"}), 401
+    if not verify_prc_signature(timestamp, signature, raw_body):
+        return jsonify({"error": "Invalid signature"}), 401
+
+    try:
+        payload = json.loads(raw_body)
+    except ValueError:
+        return jsonify({"error": "Invalid JSON body"}), 400
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Unexpected JSON body"}), 400
+
+    try:
+        bot = get_bot()
+        bot.loop.call_soon_threadsafe(bot.dispatch, "prc_webhook_event", payload)
+    except Exception:
+        # Signature was valid; never make the game retry because the bot
+        # briefly wasn't ready.
+        logging.exception("Failed to dispatch PRC webhook event to the bot")
+
+    return "", 204
 
 
 def start_web_app(bot, host="0.0.0.0", port=4000, start_next=True):

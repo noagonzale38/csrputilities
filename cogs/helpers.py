@@ -1,3 +1,4 @@
+import asyncio
 import discord
 import aiohttp
 import inspect
@@ -21,7 +22,7 @@ class Colors:
     INFO = discord.Color(BLANK_COLOR)
 
 
-CSRP_ICON = "https://csrptickets-storage.s3.us-east-1.amazonaws.com/csrp.png"
+CSRP_ICON = "https://csrptickets-storage.s3.us-east-1.amazonaws.com/018b50d0d885271446f02f157fe8e00a.png"
 CSRP_BANNER = "https://media.discordapp.net/attachments/1304614453525876746/1304614808691277824/calf.png"
 SESSION_IMAGE = "https://media.discordapp.net/attachments/1160385986501546034/1203141901683916870/image.png?ex=65e27936&is=65d00436&hm=757874665037e2b196c2f0fc6aab587f39709eefdd8891d1054dd44a71fe6c52&format=webp&quality=lossless&"
 
@@ -596,13 +597,21 @@ async def generalised_interaction_check_failure(interaction: discord.Interaction
     )
 
 
-async def api_get(url: str, headers: Optional[dict] = None, timeout: int = 10):
+async def api_get(url: str, headers: Optional[dict] = None, timeout: int = 10, retries: int = 0):
     async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
-            data = None
-            if resp.content_type == "application/json":
-                data = await resp.json()
-            return resp.status, data
+        for attempt in range(retries + 1):
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+                if resp.status in (429, 502, 503) and attempt < retries:
+                    try:
+                        delay = min(float(resp.headers.get("Retry-After")), 15)
+                    except (TypeError, ValueError):
+                        delay = 2 ** attempt
+                    await asyncio.sleep(delay)
+                    continue
+                data = None
+                if resp.content_type == "application/json":
+                    data = await resp.json()
+                return resp.status, data
 
 
 async def api_post(url: str, headers: Optional[dict] = None, json: Optional[dict] = None, data: Optional[dict] = None, timeout: int = 10):

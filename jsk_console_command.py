@@ -12,6 +12,8 @@ from os import PathLike
 import discord
 from discord.ext import commands
 
+from config import BOT_OWNER_ID
+
 active_console_sessions: dict[int, "JskConsoleView"] = {}
 
 TERMINAL_OUTPUT_LIMIT = 3200
@@ -46,6 +48,108 @@ def _tail_text(value: str, limit: int) -> str:
     if len(value) <= limit:
         return value
     return "...\n" + value[-limit:]
+
+
+# Guardrails for the console, not a sandbox: the shell inherits the bot's
+# environment (including tokens), so secret access and host-destroying
+# commands are refused up front. The bot owner (BOT_OWNER_ID) can override
+# a match after an explicit warning; everyone else is refused outright.
+# Determined bypasses are still possible.
+BLOCKED_CONSOLE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    # Secrets / credentials
+    (re.compile(r"(^|[\s'\"=/])\.env(\.\w+)?\b"), ".env files are off-limits"),
+    (re.compile(r"\bprintenv\b"), "dumping environment variables is blocked"),
+    (re.compile(r"^(sudo\s+)?(env|set|export|declare)\s*(\||>|$)"), "dumping environment variables is blocked"),
+    (re.compile(r"/proc/[\w/]*environ"), "reading process environments is blocked"),
+    (
+        re.compile(r"\$\{?\w*(TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|WEBHOOK)\w*\}?", re.IGNORECASE),
+        "expanding secret environment variables is blocked",
+    ),
+    (re.compile(r"\.ssh(/|\b)"), "the .ssh directory is off-limits"),
+    (re.compile(r"\bid_(rsa|ed25519|ecdsa|dsa)\b"), "SSH private keys are off-limits"),
+    (re.compile(r"/etc/(shadow|sudoers|gshadow)"), "system credential files are off-limits"),
+    # Destructive filesystem operations
+    (re.compile(r"--no-preserve-root"), "--no-preserve-root is blocked"),
+    (
+        re.compile(r"\brm\b[^|;&]*\s(/|/\*|~|~/|\$HOME|\.|\.\.|\*)([\s;|&]|$)"),
+        "deleting critical paths is blocked",
+    ),
+    (re.compile(r"\b(mkfs(\.\w+)?|wipefs|blkdiscard|shred)\b"), "disk formatting/wiping tools are blocked"),
+    (re.compile(r"\bdd\b[^|;&]*\bof=/dev/"), "writing to raw devices is blocked"),
+    (re.compile(r">+\s*/dev/(sd|nvme|xvd|vd|mmcblk|hd)"), "writing to raw devices is blocked"),
+    (re.compile(r"\bch(mod|own)\b[^|;&]*\s(/|/\*)([\s;|&]|$)"), "recursive permission changes on / are blocked"),
+    # Host / process sabotage
+    (re.compile(r":\s*\(\s*\)\s*\{"), "fork bombs are blocked"),
+    (re.compile(r"^(sudo\s+)?(shutdown|reboot|poweroff|halt)\b"), "shutting down the host is blocked"),
+    (
+        re.compile(r"\bsystemctl\s+(poweroff|reboot|halt|suspend|hibernate|emergency)\b"),
+        "shutting down the host is blocked",
+    ),
+    (re.compile(r"\binit\s+[06]\b"), "shutting down the host is blocked"),
+    (re.compile(r"\bkill\s+(-\w+\s+)*-1\b"), "killing all processes is blocked"),
+    (re.compile(r"\bkillall\b"), "killall is blocked"),
+    (re.compile(r"\bpm2\s+(kill|delete)\b"), "killing the bot's pm2 process is blocked"),
+    (re.compile(r"\bcrontab\s+[^|;&]*-r\b"), "removing the crontab is blocked"),
+    # Account / network tampering
+    (
+        re.compile(r"\b(useradd|userdel|usermod|adduser|deluser|passwd|visudo)\b"),
+        "account management commands are blocked",
+    ),
+    (re.compile(r"\biptables\b[^|;&]*(\s-F\b|--flush)"), "flushing firewall rules is blocked"),
+    (re.compile(r"\bufw\s+disable\b"), "disabling the firewall is blocked"),
+    # Remote code execution
+    (re.compile(r"\b(curl|wget)\b[^|;&]*\|[^|;&]*\b(ba|z|da)?sh\b"), "piping downloads into a shell is blocked"),
+]
+
+
+def _blocked_command_reason(command: str) -> str | None:
+    normalized = " ".join(command.strip().split())
+    for pattern, reason in BLOCKED_CONSOLE_PATTERNS:
+        if pattern.search(normalized):
+            return reason
+    return None
+
+
+class BlockedCommandConfirmView(discord.ui.View):
+    """Owner-only override prompt for input caught by the console guardrails."""
+
+    def __init__(self, console_view: "JskConsoleView", payload: bytes, display_input: str):
+        super().__init__(timeout=60)
+        self.console_view = console_view
+        self.payload = payload
+        self.display_input = display_input
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != BOT_OWNER_ID:
+            await interaction.response.send_message(
+                "Only the bot owner can override console restrictions.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Proceed", style=discord.ButtonStyle.danger)
+    async def proceed_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.stop()
+        self.console_view.last_input = f"[override] {self.display_input}"
+        try:
+            await self.console_view._write_bytes(self.payload)
+        except RuntimeError as exc:
+            await interaction.response.edit_message(content=str(exc), view=None)
+            return
+        await interaction.response.edit_message(
+            content="⚠️ Override accepted — input sent to the terminal.",
+            view=None,
+        )
+        await self.console_view.refresh_message(force=True)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.stop()
+        await interaction.response.edit_message(
+            content="Cancelled — nothing was sent to the terminal.",
+            view=None,
+        )
 
 
 class TerminalCommandModal(discord.ui.Modal, title="Run Terminal Command"):
@@ -237,6 +341,22 @@ class JskConsoleView(discord.ui.View):
             await interaction.response.send_message("Command cannot be empty.", ephemeral=True)
             return
 
+        blocked_reason = _blocked_command_reason(command)
+        if blocked_reason:
+            if interaction.user.id != BOT_OWNER_ID:
+                self.last_input = f"[blocked] {command}"
+                await interaction.response.send_message(f"⛔ Command blocked: {blocked_reason}.", ephemeral=True)
+                await self.refresh_message(force=True)
+                return
+            await interaction.response.send_message(
+                f"⚠️ **Restricted command** — {blocked_reason}.\n"
+                f"```\n{command[:500]}\n```\n"
+                "Running this can expose secrets or damage the host. Proceed anyway?",
+                view=BlockedCommandConfirmView(self, (command + "\n").encode("utf-8"), command[:80]),
+                ephemeral=True,
+            )
+            return
+
         self.last_input = command
         try:
             await self._write_bytes((command + "\n").encode("utf-8"))
@@ -253,6 +373,23 @@ class JskConsoleView(discord.ui.View):
             payload = bytes(payload_text, "utf-8").decode("unicode_escape").encode("utf-8")
         except UnicodeDecodeError:
             await interaction.response.send_message("Invalid escape sequence in raw input.", ephemeral=True)
+            return
+
+        blocked_reason = _blocked_command_reason(payload.decode("utf-8", errors="replace"))
+        if blocked_reason:
+            display_input = payload_text.replace("\n", "\\n")
+            if interaction.user.id != BOT_OWNER_ID:
+                self.last_input = f"[blocked] {display_input[:80]}"
+                await interaction.response.send_message(f"⛔ Input blocked: {blocked_reason}.", ephemeral=True)
+                await self.refresh_message(force=True)
+                return
+            await interaction.response.send_message(
+                f"⚠️ **Restricted input** — {blocked_reason}.\n"
+                f"```\n{display_input[:500]}\n```\n"
+                "Sending this can expose secrets or damage the host. Proceed anyway?",
+                view=BlockedCommandConfirmView(self, payload, display_input[:80]),
+                ephemeral=True,
+            )
             return
 
         self.last_input = payload_text.replace("\n", "\\n")

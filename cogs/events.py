@@ -15,7 +15,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from config import (
-    SERVER_KEY, LOGGING_CHANNEL_ID, MODERATION_ROLE_IDS,
+    HEADERS, KEY_HEADERS, LOGGING_CHANNEL_ID, MODERATION_ROLE_IDS,
     CHANNEL_ID, BAN_CHANNEL, LOG_SERVER_URL, LOG_SERVER_AUTH,
     LATENCY_API_URL, MOD_CHANNEL_ID, MOD_ROLE_ID,
     afk_file,
@@ -48,7 +48,7 @@ async def check_usernames():
     try:
         status, data = await api_get(
             'https://api.erlc.gg/v1/server/players',
-            headers={'Server-Key': SERVER_KEY},
+            headers=KEY_HEADERS,
         )
         if status != 200 or not isinstance(data, list):
             return []
@@ -76,7 +76,7 @@ async def ban_user(user_id, reason):
     try:
         await api_post(
             "https://api.erlc.gg/v1/server/command",
-            headers={"Content-Type": "application/json", "Server-Key": SERVER_KEY},
+            headers=HEADERS,
             json={"command": f":ban {user_id} {reason}"},
         )
     except Exception as e:
@@ -329,8 +329,57 @@ class LeaveFeedbackQuestionModal(discord.ui.Modal, title="Leave Feedback"):
 
 
 class Events(commands.Cog):
+    CIRCLE_CHANNEL_ID = 988922384927055912
+    CIRCLE_FILE_URL = "https://csrptickets-storage.s3.us-east-1.amazonaws.com/circle.mp3"
+    SPAM_THRESHOLD = 5
+    SPAM_WINDOW = 5.0
+
+    SSU_GUILD_ID = 965829463512330260
+    SSU_STAFF_ROLE_ID = 968852438922715176
+    SSU_EXEMPT_ROLE_IDS = {
+        1137117556348567614,
+        1137129271769436340,
+        985228543191548004,
+        1441172991563141130,
+    }
+    SSU_EXEMPT_USER_IDS = {1092489655888379915}
+    # Pinging these users never counts as asking staff for an SSU
+    SSU_EXEMPT_PING_USER_IDS = {1092489655888379915}
+    SSU_ANNOUNCE_CHANNEL_URL = "https://discord.com/channels/965829463512330260/1159839282635227286"
+    SSU_REQUEST_RE = re.compile(
+        "|".join(
+            [
+                # "host an SSU", "start SSU", "can we have an SSU", "do an SSU"
+                r"\b(?:host|start|run|open|do|make|begin|hold|have)\s+(?:an?\s+|the\s+)?ssus?\b",
+                # "I want an SSU", "we need an SSU", "wanna SSU"
+                r"\b(?:want|wants|need|needs|wanna)\s+(?:an?\s+|the\s+)?ssus?\b",
+                # "can we get an SSU", "give us an SSU"
+                r"\b(?:get|give\s+(?:us|me))\s+(?:an?\s+|the\s+)?ssus?\b",
+                # "wanna get on SSU", "hop on an SSU", "come on ssu", "jump in the ssu"
+                r"\b(?:get|hop|jump|come|be|join|pop|log)\s+(?:on|onto|in|into|up)\s+(?:an?\s+|the\s+)?ssus?\b",
+                # "let's SSU", "lets an ssu"
+                r"\b(?:let'?s|lets)\s+(?:an?\s+|the\s+)?ssus?\b",
+                # "who's hosting an SSU", "anyone doing ssu"
+                r"\b(?:hosting|starting|running|doing|holding)\s+(?:an?\s+|the\s+)?ssus?\b",
+                # "please SSU", "pls ssu"
+                r"\b(?:please|pls|plz)\s+ssus?\b",
+                # "SSU please", "SSU now", "SSU today", "SSU when", "SSU?"
+                r"\bssus?\s+(?:please|pls|plz|now|today|tonight|soon|when|time|rn|tmr|tomorrow|later)\b",
+                r"\bssus?\s*\?",
+                # "when's the SSU", "when is the next SSU"
+                r"\bwhen(?:'?s|\s+is|\s+will|\s+are)?\s+(?:the\s+|an?\s+)?(?:next\s+)?ssus?\b",
+                # "any SSU", "is there gonna be an SSU", "will there be an SSU"
+                r"\b(?:any|is\s+there(?:\s+gonna\s+be)?|will\s+there\s+be)\s+(?:an?\s+|the\s+)?ssus?\b",
+                # "can you SSU", "can someone ssu"
+                r"\bcan\s+(?:you|u|someone|somebody|we)\s+(?:please\s+|pls\s+|plz\s+)?ssus?\b",
+            ]
+        ),
+        re.IGNORECASE,
+    )
+
     def __init__(self, bot):
         self.bot = bot
+        self._circle_timestamps: list[float] = []
         self.report_ctx_menu = discord.app_commands.ContextMenu(
             name="Report Message",
             callback=self._report_message_callback,
@@ -531,9 +580,64 @@ class Events(commands.Cog):
             embed.set_footer(text=f"User ID: {ctx.author.id}", icon_url=CSRP_ICON)
             await log_channel.send(embed=embed)
 
+    async def _check_ssu_ping(self, message: discord.Message):
+        if not message.guild or message.guild.id != self.SSU_GUILD_ID:
+            return
+        # A message that's nothing but "ssu" alongside the ping counts as a request too
+        bare_content = re.sub(r"<@[!&#]?\d+>", "", message.content).strip().strip("!?.,~ ").lower()
+        if bare_content not in ("ssu", "ssus") and not self.SSU_REQUEST_RE.search(message.content):
+            return
+
+        author = message.author
+        if author.id == message.guild.owner_id or author.id in self.SSU_EXEMPT_USER_IDS:
+            return
+        if any(role.id in self.SSU_EXEMPT_ROLE_IDS for role in author.roles):
+            return
+
+        author_is_staff = any(r.id == self.SSU_STAFF_ROLE_ID for r in author.roles)
+        pinged_staff = any(r.id == self.SSU_STAFF_ROLE_ID for r in message.role_mentions) or any(
+            isinstance(m, discord.Member) and any(r.id == self.SSU_STAFF_ROLE_ID for r in m.roles)
+            and m.id not in self.SSU_EXEMPT_PING_USER_IDS
+            and not (author_is_staff and m.id == author.id)
+            for m in message.mentions
+        )
+        if not pinged_staff:
+            return
+
+        embed = discord.Embed(
+            title="⚠️ Asking for an SSU",
+            description=(
+                "Please don't ping staff to host an SSU. When a Session Commences, "
+                f"you'll see it in {self.SSU_ANNOUNCE_CHANNEL_URL}. Continued pinging "
+                "of staff for this reason will result in moderation. Thank you!"
+            ),
+            color=discord.Color.yellow(),
+        )
+        brand_footer(embed)
+        try:
+            await message.reply(embed=embed, mention_author=False)
+        except discord.HTTPException:
+            pass
+
     @commands.Cog.listener()
     async def on_message(self, message):
         TICKET_CATEGORY_ID = 1176986720772833421
+
+        if message.channel.id == self.CIRCLE_CHANNEL_ID and not message.author.bot and "circle" in message.content:
+            now = asyncio.get_event_loop().time()
+            self._circle_timestamps = [t for t in self._circle_timestamps if now - t < self.SPAM_WINDOW]
+            if len(self._circle_timestamps) < self.SPAM_THRESHOLD:
+                self._circle_timestamps.append(now)
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(self.CIRCLE_FILE_URL) as resp:
+                            if resp.status == 200:
+                                data = await resp.read()
+                                file = discord.File(io.BytesIO(data), filename="circle.mp3")
+                                await message.reply(file=file, mention_author=False)
+                except Exception:
+                    pass
+
         if message.author.bot:
             if (
                 message.channel.category_id == TICKET_CATEGORY_ID
@@ -561,11 +665,17 @@ class Events(commands.Cog):
                         break
             return
 
+        await self._check_ssu_ping(message)
+
         ctx = await self.bot.get_context(message)
 
         if message.channel.id == STAFF_FEEDBACK_CHANNEL:
             is_feedback_cmd = ctx.valid and ctx.command and ctx.command.qualified_name == "staff_feedback"
-            if not is_feedback_cmd:
+            exempt_role_ids = {1137117556348567614, 1137129271769436340, 1160302513820536882, 985228543191548004}
+            is_exempt = isinstance(message.author, discord.Member) and any(
+                role.id in exempt_role_ids for role in message.author.roles
+            )
+            if not is_feedback_cmd and not is_exempt:
                 try:
                     await message.delete()
                 except (discord.Forbidden, discord.NotFound, discord.HTTPException):
@@ -618,6 +728,36 @@ class Events(commands.Cog):
     @commands.Cog.listener()
     async def on_guild_join(self, guild):
         await self.bot.tree.sync(guild=guild)
+
+    @commands.Cog.listener()
+    async def on_member_ban(self, guild: discord.Guild, user):
+        log_channel = self.bot.get_channel(1317814337532072027)
+        if not log_channel:
+            return
+
+        # user is only a Member (with roles) if they were cached when banned
+        if isinstance(user, discord.Member):
+            roles = [r.mention for r in reversed(user.roles) if r != guild.default_role]
+            roles_text = ", ".join(roles) if roles else "None"
+            if len(roles_text) > 1024:
+                roles_text = roles_text[:1010].rsplit(",", 1)[0] + ", ..."
+        else:
+            roles_text = "Unknown (member was not in cache)"
+
+        embed = discord.Embed(
+            title="Member Banned",
+            description=(
+                f"> **User:** {user_tag(user)}\n"
+                f"> **User ID:** {user.id}"
+            ),
+            color=BLANK_COLOR,
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.add_field(name="Roles", value=roles_text, inline=False)
+        embed.set_author(name="CSRP Utilities", icon_url=CSRP_ICON)
+        embed.set_thumbnail(url=user.display_avatar.url)
+        embed.set_footer(text=f"User ID: {user.id}", icon_url=CSRP_ICON)
+        await log_channel.send(embed=embed)
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
@@ -707,7 +847,7 @@ class Events(commands.Cog):
         try:
             status, data = await api_get(
                 "https://api.erlc.gg/v1/server/players",
-                headers={"Server-Key": SERVER_KEY},
+                headers=KEY_HEADERS,
             )
             if status != 200 or not isinstance(data, list):
                 return
@@ -739,7 +879,7 @@ class Events(commands.Cog):
             try:
                 status, _ = await api_post(
                     "https://api.erlc.gg/v1/server/command",
-                    headers={"Content-Type": "application/json", "Server-Key": SERVER_KEY},
+                    headers=HEADERS,
                     json={"command": str(pm_command)},
                 )
 

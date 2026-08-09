@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 from discord import app_commands, ui
+import asyncio
 import json
 import contextlib
 from typing import Optional
@@ -248,20 +249,24 @@ class StaffHostageRequestModal(discord.ui.Modal, title="Manual Hostage Request")
         )
 
 
+_hostage_sticky_lock = asyncio.Lock()
+
+
 async def ensure_hostage_sticky_message(channel: discord.TextChannel) -> None:
     guild = getattr(channel, "guild", None)
     if guild is None:
         return
 
-    settings = get_guild_settings(guild.id)
-    sticky_message_id = settings.get("hostage_sticky_message_id")
-    if sticky_message_id:
-        with contextlib.suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
-            await channel.fetch_message(int(sticky_message_id))
-            return
+    async with _hostage_sticky_lock:
+        settings = get_guild_settings(guild.id)
+        sticky_message_id = settings.get("hostage_sticky_message_id")
+        if sticky_message_id:
+            with contextlib.suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
+                await channel.fetch_message(int(sticky_message_id))
+                return
 
-    message = await channel.send(embed=_build_hostage_sticky_embed(guild), view=HostageStickyView())
-    update_guild_setting(guild.id, "hostage_sticky_message_id", message.id)
+        message = await channel.send(embed=_build_hostage_sticky_embed(guild), view=HostageStickyView())
+        update_guild_setting(guild.id, "hostage_sticky_message_id", message.id)
 
 
 async def refresh_hostage_sticky_message(channel: discord.TextChannel) -> None:
@@ -269,15 +274,19 @@ async def refresh_hostage_sticky_message(channel: discord.TextChannel) -> None:
     if guild is None:
         return
 
-    settings = get_guild_settings(guild.id)
-    sticky_message_id = settings.get("hostage_sticky_message_id")
-    if sticky_message_id:
-        with contextlib.suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
-            old_message = await channel.fetch_message(int(sticky_message_id))
-            await old_message.delete()
+    async with _hostage_sticky_lock:
+        settings = get_guild_settings(guild.id)
+        sticky_message_id = settings.get("hostage_sticky_message_id")
+        if sticky_message_id:
+            # A refresh queued behind the lock may find the sticky already reposted.
+            if channel.last_message_id == int(sticky_message_id):
+                return
+            with contextlib.suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
+                old_message = await channel.fetch_message(int(sticky_message_id))
+                await old_message.delete()
 
-    message = await channel.send(embed=_build_hostage_sticky_embed(guild), view=HostageStickyView())
-    update_guild_setting(guild.id, "hostage_sticky_message_id", message.id)
+        message = await channel.send(embed=_build_hostage_sticky_embed(guild), view=HostageStickyView())
+        update_guild_setting(guild.id, "hostage_sticky_message_id", message.id)
 
 
 PARTNERSHIP_CHANNEL_ID = 1438594753640927323
@@ -306,21 +315,25 @@ def _build_partnership_sticky_embed(guild: discord.Guild) -> discord.Embed:
     return embed
 
 
+_partnership_sticky_lock = asyncio.Lock()
+
+
 async def ensure_partnership_sticky_message(bot) -> None:
     channel = bot.get_channel(PARTNERSHIP_CHANNEL_ID)
     if channel is None:
         return
 
     guild = channel.guild
-    settings = get_guild_settings(guild.id)
-    sticky_message_id = settings.get("partnership_sticky_message_id")
-    if sticky_message_id:
-        with contextlib.suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
-            await channel.fetch_message(int(sticky_message_id))
-            return
+    async with _partnership_sticky_lock:
+        settings = get_guild_settings(guild.id)
+        sticky_message_id = settings.get("partnership_sticky_message_id")
+        if sticky_message_id:
+            with contextlib.suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
+                await channel.fetch_message(int(sticky_message_id))
+                return
 
-    message = await channel.send(embed=_build_partnership_sticky_embed(guild))
-    update_guild_setting(guild.id, "partnership_sticky_message_id", message.id)
+        message = await channel.send(embed=_build_partnership_sticky_embed(guild))
+        update_guild_setting(guild.id, "partnership_sticky_message_id", message.id)
 
 
 async def refresh_partnership_sticky_message(bot) -> None:
@@ -329,15 +342,110 @@ async def refresh_partnership_sticky_message(bot) -> None:
         return
 
     guild = channel.guild
-    settings = get_guild_settings(guild.id)
-    sticky_message_id = settings.get("partnership_sticky_message_id")
-    if sticky_message_id:
-        with contextlib.suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
-            old_message = await channel.fetch_message(int(sticky_message_id))
-            await old_message.delete()
+    async with _partnership_sticky_lock:
+        settings = get_guild_settings(guild.id)
+        sticky_message_id = settings.get("partnership_sticky_message_id")
+        if sticky_message_id:
+            # A refresh queued behind the lock may find the sticky already reposted.
+            if channel.last_message_id == int(sticky_message_id):
+                return
+            with contextlib.suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
+                old_message = await channel.fetch_message(int(sticky_message_id))
+                await old_message.delete()
 
-    message = await channel.send(embed=_build_partnership_sticky_embed(guild))
-    update_guild_setting(guild.id, "partnership_sticky_message_id", message.id)
+        message = await channel.send(embed=_build_partnership_sticky_embed(guild))
+        update_guild_setting(guild.id, "partnership_sticky_message_id", message.id)
+
+
+def _build_active_hit_pages(guild, entries, query=None):
+    title = f'Active Hits — "{query}"' if query else "Active Hits"
+
+    def finish(embed):
+        embed.set_author(name=guild.name, icon_url=guild.icon.url if guild.icon else "")
+        brand_footer(embed)
+        return embed
+
+    if not entries:
+        return [
+            finish(
+                discord.Embed(
+                    title=title,
+                    description=f"No active hits matching `{query}`." if query else "No active hits at the moment.",
+                    color=BLANK_COLOR,
+                )
+            )
+        ]
+
+    per_page = 5
+    pages = []
+    for i in range(0, len(entries), per_page):
+        chunk = entries[i:i + per_page]
+        pages.append(
+            finish(
+                discord.Embed(
+                    title=title,
+                    description="\n\n".join(
+                        (
+                            f"**Hit #{number}**\n"
+                            f"> **Target:** `{hit_data['target']}`\n"
+                            f"> **Bounty:** `{hit_data['bounty']}`\n"
+                            f"> **Reason:** {hit_data['reason']}\n"
+                            f"> **Placed By:** <@{hit_data['placed_by']}>"
+                        )
+                        for number, hit_data in chunk
+                    ),
+                    color=BLANK_COLOR,
+                )
+            )
+        )
+    return pages
+
+
+class HitSearchModal(discord.ui.Modal, title="Search Active Hits"):
+    query = ui.TextInput(
+        label="Username",
+        placeholder="Full or partial in-game name",
+        required=True,
+        max_length=100,
+    )
+
+    def __init__(self, parent_view):
+        super().__init__()
+        self.parent_view = parent_view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await self.parent_view.set_query(interaction, self.query.value.strip() or None)
+
+
+class ActiveHitsView(PaginatorView):
+    def __init__(self, guild, entries, author, *, timeout: float = 120):
+        self.guild = guild
+        self.entries = entries
+        self.query = None
+        super().__init__(_build_active_hit_pages(guild, entries), author, timeout=timeout)
+
+    def _update_buttons(self):
+        super()._update_buttons()
+        self.clear_btn.disabled = self.query is None
+
+    async def set_query(self, interaction: discord.Interaction, query: Optional[str]):
+        self.query = query
+        if query:
+            entries = [(number, hit_data) for number, hit_data in self.entries if query.lower() in hit_data["target"].lower()]
+        else:
+            entries = self.entries
+        self.pages = _build_active_hit_pages(self.guild, entries, query)
+        self.current = 0
+        self._update_buttons()
+        await interaction.response.edit_message(embed=self.pages[0], view=self)
+
+    @discord.ui.button(label="Search", style=discord.ButtonStyle.primary, row=1)
+    async def search_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(HitSearchModal(self))
+
+    @discord.ui.button(label="Clear Search", style=discord.ButtonStyle.secondary, row=1)
+    async def clear_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.set_query(interaction, None)
 
 
 class DenyHitModal(discord.ui.Modal, title="Deny Hit"):
@@ -786,44 +894,14 @@ class Hits(commands.Cog):
             hits = []
 
         if not hits:
-            embed = discord.Embed(
-                title="Active Hits",
-                description="No active hits at the moment.",
-                color=BLANK_COLOR,
-            )
-            embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else "")
-            brand_footer(embed)
+            embed = _build_active_hit_pages(ctx.guild, [])[0]
             await ctx.send(embed=embed)
             return
 
-        per_page = 5
-        pages = []
-        for i in range(0, len(hits), per_page):
-            chunk = hits[i:i + per_page]
-            embed = discord.Embed(
-                title="Active Hits",
-                description="\n\n".join(
-                    (
-                        f"**Hit #{idx}**\n"
-                        f"> **Target:** `{hit_data['target']}`\n"
-                        f"> **Bounty:** `{hit_data['bounty']}`\n"
-                        f"> **Reason:** {hit_data['reason']}\n"
-                        f"> **Placed By:** <@{hit_data['placed_by']}>"
-                    )
-                    for idx, hit_data in enumerate(chunk, start=i + 1)
-                ),
-                color=BLANK_COLOR,
-            )
-            embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else "")
-            brand_footer(embed)
-            pages.append(embed)
-
-        if len(pages) == 1:
-            await ctx.send(embed=pages[0])
-        else:
-            view = PaginatorView(pages, ctx.author)
-            msg = await ctx.send(embed=pages[0], view=view)
-            view.message = msg
+        entries = list(enumerate(hits, start=1))
+        view = ActiveHitsView(ctx.guild, entries, ctx.author)
+        msg = await ctx.send(embed=view.pages[0], view=view)
+        view.message = msg
 
     @hit.command(name="complete", description="Mark a hit as completed.")
     @app_commands.describe(target="The target's in-game name")

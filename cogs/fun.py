@@ -124,6 +124,168 @@ EIGHT_BALL_RESPONSES = [
 blacklisted_users = [740324586234708028, 736978544869113927]
 SHIP_STATS_FILE = Path(__file__).resolve().parent.parent / "ship_stats.json"
 
+# This pair always rolls in the 95-100% range, in every guild, overriding normal RNG and stored overrides.
+FAVORED_SHIP_PAIR = frozenset({1122940377607979010, 1177312973295988777})
+FAVORED_SHIP_RANGE = (95, 100)
+
+# (max_score, emoji, verdict, quotes, nudges) — first tier whose max_score covers the roll wins.
+# Nudges are format templates: {a} and {b} are the two display names.
+SHIP_TIERS = [
+    (
+        9, "💀", "Absolutely not. Call it off.",
+        [
+            "Even the matchmaker walked away from this one.",
+            "Some people are meant to stay strangers. This is one of those times.",
+            "The stars aligned, took one look, and went back to bed.",
+        ],
+        [
+            "{a} and {b} may as well block each other and call it a day.",
+            "Nobody tell {a} or {b} about this. Ever.",
+            "Opposite sides of the server, effective immediately.",
+            "Best case here is that {a} and {b} never get put on the same patrol.",
+            "If {a} and {b} were the last two people on earth, that's where it ends.",
+            "{a}, {b} — pretend this never loaded.",
+        ],
+    ),
+    (
+        24, "🧊", "Ice cold. RUN!",
+        [
+            "There's chemistry here, and all of it is bad.",
+            "You two would argue about which way the toilet paper goes. Every day.",
+            "This isn't a slow burn, it's just cold.",
+        ],
+        [
+            "{a} and {b} can stay coworkers. Nothing more.",
+            "One round of rock paper scissors and {a} and {b} never bring it up again.",
+            "Separate tables, polite wave. That's the ceiling.",
+            "Somebody keep {a} and {b} on different callsigns.",
+            "{a} and {b} would be fighting about the thermostat inside a week.",
+            "A nod in the hallway is about as far as this goes.",
+        ],
+    ),
+    (
+        44, "🤔", "Hmm... questionable.",
+        [
+            "Stranger things have worked out. Not many, but some.",
+            "There's something here. Nobody's sure what.",
+            "The vibes are inconclusive. Proceed with caution.",
+        ],
+        [
+            "{a} and {b} could grab a coffee and see if there's anything to talk about.",
+            "One game together. If it's awkward, nobody speaks of it again.",
+            "{a} should probably text first. Carefully.",
+            "A week of small talk before anyone promises anything.",
+            "{a} and {b} are one shared inside joke away from figuring this out.",
+            "Low stakes only — don't book anything non-refundable.",
+        ],
+    ),
+    (
+        59, "🌱", "Something could grow here.",
+        [
+            "Not love at first sight, but maybe love at second glance.",
+            "Every great story starts somewhere awkward.",
+            "The foundation is there. Somebody just has to build on it.",
+        ],
+        [
+            "{a} and {b} should hang out in VC for an hour and see where it lands.",
+            "Long drive, music up. The rest sorts itself out.",
+            "Cook something together, split the cleanup, see what happens.",
+            "Somebody has to make the first move, and it should probably be {a}.",
+            "{a} and {b} are one good night out from knowing for sure.",
+            "Worth keeping an eye on. These two are closer than they think.",
+        ],
+    ),
+    (
+        74, "💫", "This could actually work out!",
+        [
+            "The odds are on your side for once.",
+            "You two make sense in a way that's hard to explain.",
+            "This has real potential. Don't waste it.",
+        ],
+        [
+            "{a} and {b} should go on an actual date, not just a hangout.",
+            "{a}, ask {b} out. The odds are already doing the hard part.",
+            "Road trip, and let it run long.",
+            "Make plans for next weekend before this one runs out.",
+            "Everyone is going to ask {a} and {b} when it became official.",
+            "This one's worth taking seriously.",
+        ],
+    ),
+    (
+        89, "💞", "Meant to be together!",
+        [
+            "Everyone else saw this coming. You two were just slow.",
+            "This is the kind of pair people write songs about.",
+            "You're not soulmates yet, but you're close enough to notice.",
+        ],
+        [
+            "{a} and {b} should stop overthinking it and make it official.",
+            "{a}, tell {b} the thing you've been avoiding saying.",
+            "Weekend away. Book it.",
+            "{a} and {b} are the last two people to find out about this.",
+            "Somebody start drafting the toast.",
+            "{b} already knows, {a}. Say it anyway.",
+        ],
+    ),
+    (
+        99, "💘", "Written in the stars.",
+        [
+            "Cupid didn't even have to aim for this one.",
+            "The universe already made the call. You're just catching up.",
+            "This is what everybody else is looking for.",
+        ],
+        [
+            "{a} — shoot your shot, right now, no hesitation.",
+            "{a}, say something before somebody else beats you to it.",
+            "{a} and {b} should start picking out a venue, honestly.",
+            "There is nothing left to think about here.",
+            "Cupid already filed the paperwork on {a} and {b}.",
+            "Stop wasting everyone's time and get on with it.",
+        ],
+    ),
+    (
+        100, "💍", "PERFECT MATCH!",
+        [
+            "A flawless 100%. This has never been more certain.",
+            "The rest of us should just watch and take notes.",
+            "There is no version of this that doesn't work.",
+        ],
+        [
+            "{a} — shoot your shot. You literally cannot miss.",
+            "{a} and {b} should get married. Today. The math is settled.",
+            "Skip the small talk, go straight to forever.",
+            "The venue, the cake, the whole thing. Go.",
+            "Nothing more to say here. {a} and {b} already know.",
+            "Whatever {a} and {b} had planned for today, cancel it.",
+        ],
+    ),
+]
+
+
+def _ship_tier(score: int) -> tuple[str, str, str, str]:
+    """Returns (emoji, verdict, quote, nudge) for a compatibility score.
+
+    The nudge is still a template — call .format(a=..., b=...) on it.
+    """
+    for max_score, emoji, verdict, quotes, nudges in SHIP_TIERS:
+        if score <= max_score:
+            return emoji, verdict, random.choice(quotes), random.choice(nudges)
+    return SHIP_TIERS[-1][1], SHIP_TIERS[-1][2], random.choice(SHIP_TIERS[-1][3]), random.choice(SHIP_TIERS[-1][4])
+
+
+def _strip_name_prefix(name: str) -> str:
+    """Drops rank/callsign prefixes, so "STAFF | bidoblo" becomes "bidoblo"."""
+    stripped = name.split("|")[-1].strip()
+    return stripped or name
+
+
+def _ship_name(name1: str, name2: str) -> str:
+    name1 = _strip_name_prefix(name1)
+    name2 = _strip_name_prefix(name2)
+    first = name1[:max(1, len(name1) // 2)]
+    second = name2[len(name2) // 2:] or name2
+    return (first + second).title()
+
 
 def load_afk():
     with open(afk_file, "r") as f:
@@ -490,48 +652,53 @@ class Fun(commands.Cog):
             await ctx.send(embed=error_embed("Invalid Users", "You can't ship someone with themselves!"))
             return
 
-        override_score = get_ship_override(ctx.guild.id, user1.id, user2.id)
-        chance = override_score if override_score is not None else random.randint(0, 100)
+        if {user1.id, user2.id} == FAVORED_SHIP_PAIR:
+            chance = random.randint(*FAVORED_SHIP_RANGE)
+        else:
+            override_score = get_ship_override(ctx.guild.id, user1.id, user2.id)
+            chance = override_score if override_score is not None else random.randint(0, 100)
         previous_stats = get_ship_pair_stats(ctx.guild.id, user1.id, user2.id)
         updated_stats = record_ship_pair(ctx.guild.id, user1, user2, chance)
-        if chance <= 25:
-            verdict = "NOT meant to be together. RUN!"
-        elif chance <= 50:
-            verdict = "Hmm... questionable."
-        elif chance <= 75:
-            verdict = "This could work out!"
-        else:
-            verdict = "Meant to be together!"
+        emoji, verdict, quote, nudge = _ship_tier(chance)
+        nudge = nudge.format(a=f"**{user1.display_name}**", b=f"**{user2.display_name}**")
 
         bar_fill = chance // 10
-        bar = "█" * bar_fill + "░" * (10 - bar_fill)
+        bar = "💖" * bar_fill + "🤍" * (10 - bar_fill)
 
         embed = discord.Embed(
-            title=f"Ship — {user1.display_name} & {user2.display_name}",
+            title=f"{emoji} {user1.display_name} 💕 {user2.display_name}",
             description=(
-                f"> **Verdict:** {verdict}\n"
-                f"> **Compatibility:** `{bar}` **{chance}%**\n"
-                f"> **Times Shipped:** **{updated_stats['count']}**\n"
-                f"> **Average Compatibility:** **{updated_stats['average_score']}%**"
+                f"### {bar}\n"
+                f"## {chance}% — {verdict}\n"
+                f"*\"{quote}\"*\n\n"
+                f"💡 {nudge}"
             ),
             color=BLANK_COLOR,
             )
+        embed.add_field(
+            name="💌 Ship Name",
+            value=f"> **{_ship_name(user1.display_name, user2.display_name)}**",
+            inline=True,
+        )
+        embed.add_field(
+            name="📊 All Time",
+            value=(
+                f"> 🔁 **{updated_stats['count']}** ships\n"
+                f"> 📈 **{updated_stats['average_score']}%** average"
+            ),
+            inline=True,
+        )
         if previous_stats["count"]:
             embed.add_field(
-                name="Previous Stats",
+                name="🕰️ Before This Ship",
                 value=(
-                    f"> **Previous Ships:** **{previous_stats['count']}**\n"
-                    f"> **Previous Average:** **{previous_stats['average_score']}%**"
+                    f"> 🔁 **{previous_stats['count']}** ships\n"
+                    f"> 📈 **{previous_stats['average_score']}%** average"
                 ),
-                inline=False,
+                inline=True,
             )
-        if override_score is not None:
-            embed.add_field(
-                name="Override Active",
-                value=f"> This pair has a forced compatibility of **{override_score}%**.",
-                inline=False,
-            )
-        embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else "")
+        embed.set_thumbnail(url=user2.display_avatar.url)
+        embed.set_author(name=user1.display_name, icon_url=user1.display_avatar.url)
         brand_footer(embed)
         await ctx.send(embed=embed)
 

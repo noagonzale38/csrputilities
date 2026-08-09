@@ -16,16 +16,17 @@ import aiohttp
 import asyncio
 
 from config import (
-    LATENCY_API_URL, LOG_SERVER_AUTH, COOKIE_API_AUTH, SERVER_KEY,
+    LATENCY_API_URL, LOG_SERVER_AUTH, COOKIE_API_AUTH,
     SENTRY_API_KEY, DEV_ROLE_ID_ADMIN,
     is_support, is_bot_dev, is_bot_staff, is_sales_authorized,
 )
 from cogs.helpers import (
     Colors, BLANK_COLOR, CSRP_ICON, CSRP_BANNER, CHECK, CROSS, ONLINE, LOADING, PENDING,
     success_embed, error_embed, info_embed, loading_embed, brand_footer, embed_description,
-    api_get, ConfirmView, generalised_interaction_check_failure,
+    api_get, ConfirmView, PaginatorView, generalised_interaction_check_failure,
 )
 from cogs.settings import get_guild_settings, has_setting_permission, member_has_rank_or_higher
+from cogs.erlc import _resolve_roblox_users, _resolve_roblox_username
 from lib.claude_runner import ClaudeRunControl, stream_claude_prompt
 
 MESSAGE_LINK_RE = re.compile(
@@ -40,6 +41,19 @@ database_options = {
     "postgres": "ticketsbot",
     "postgres-archive": "archive",
     "postgres-cache": "botcache",
+}
+
+RXX_QUEUE_CATEGORY_ID = 1139516721166827531
+RXX_QUEUE_ALLOWED_ROLE_IDS = {
+    1137117556348567614,
+    1131166127964291172,
+    1157648329619021844,
+    793162371702194207,
+}
+RXX_QUEUE_SOURCE_CATEGORY_IDS = {
+    1250633639545536523,
+    1176986720772833421,
+    1191433020868132924,
 }
 
 
@@ -71,7 +85,7 @@ class ClaudeReplyModal(discord.ui.Modal, title="Reply to Claude"):
 
 class ClaudeSessionView(discord.ui.View):
     def __init__(self, cog: "Utility", ctx: commands.Context, prompt: str):
-        super().__init__(timeout=3600)
+        super().__init__(timeout=None)
         self.cog = cog
         self.ctx = ctx
         self.owner = ctx.author
@@ -787,6 +801,51 @@ class Utility(commands.Cog):
             if 'output_path' in locals() and os.path.exists(output_path):
                 os.remove(output_path)
 
+    @app_commands.command(name="rxxqueue", description="Move this channel to the RXX queue category.")
+    @app_commands.guild_only()
+    async def rxxqueue(self, interaction: discord.Interaction):
+        if not any(role.id in RXX_QUEUE_ALLOWED_ROLE_IDS for role in interaction.user.roles):
+            await interaction.response.send_message(
+                embed=error_embed("Missing Permissions", "You do not have permission to use this command."),
+                ephemeral=True,
+            )
+            return
+
+        channel = interaction.channel
+        if not isinstance(channel, discord.TextChannel) or channel.category_id not in RXX_QUEUE_SOURCE_CATEGORY_IDS:
+            await interaction.response.send_message(
+                embed=error_embed("Invalid Channel", "This command can only be used in channels within the allowed categories."),
+                ephemeral=True,
+            )
+            return
+
+        target_category = interaction.guild.get_channel(RXX_QUEUE_CATEGORY_ID)
+        if not isinstance(target_category, discord.CategoryChannel):
+            await interaction.response.send_message(
+                embed=error_embed("Category Not Found", "I couldn't find the RXX queue category."),
+                ephemeral=True,
+            )
+            return
+
+        try:
+            await channel.edit(category=target_category)
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                embed=error_embed("Missing Permissions", "I don't have permission to move this channel."),
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException as e:
+            await interaction.response.send_message(
+                embed=error_embed("Move Failed", f"Failed to move the channel: `{e}`"),
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            embed=success_embed("Channel Moved", f"{channel.mention} has been moved to the RXX queue.")
+        )
+
     @commands.hybrid_command(name="docker-exec", description="Execute a SQL command against CSRP Tickets database.")
     @is_bot_dev()
     @app_commands.describe(database="Select the target database", command="SQL command to execute")
@@ -879,47 +938,129 @@ class Utility(commands.Cog):
 
         session_view = ClaudeSessionView(self, ctx, prompt)
         progress_message = await ctx.send(embed=session_view.build_embed(), view=session_view, legacy_embeds=True)
+        if ctx.interaction is not None:
+            # Followup messages edit via the interaction webhook token, which
+            # expires after 15 minutes; re-fetch so edits use the bot token.
+            with contextlib.suppress(discord.HTTPException):
+                progress_message = await ctx.channel.fetch_message(progress_message.id)
         session_view.message = progress_message
         self._active_claude_sessions[ctx.author.id] = session_view
         self._track_claude_session_task(session_view, session_view.start_run(prompt))
 
     @commands.hybrid_command(name="sales", description="Get current group sales data.")
     @is_sales_authorized()
-    async def sales(self, ctx):
+    async def sales(self, ctx, username: str = None):
         await ctx.defer()
         try:
             status, data = await api_get(
                 'https://api.cookie-api.com/api/group/group-sales?workspace_id=639826',
                 headers={'Authorization': COOKIE_API_AUTH},
+                retries=3,
             )
+            if status == 429:
+                await ctx.send(embed=error_embed("Rate Limited", "The sales API is rate limiting us. Please try again in a minute."))
+                return
             if not data:
-                await ctx.send(embed=error_embed("Fetch Failed", "Failed to fetch sales data."))
+                await ctx.send(embed=error_embed("Fetch Failed", f"Failed to fetch sales data (HTTP {status})."))
                 return
 
             sales_data = data.get('sales')
             if not isinstance(sales_data, list):
-                await ctx.send(embed=error_embed("Unexpected Response", "Unexpected response format."))
+                api_error = data.get('error') or data.get('message') or data.get('detail')
+                if api_error:
+                    await ctx.send(embed=error_embed("Fetch Failed", f"API error (HTTP {status}): `{str(api_error)[:200]}`"))
+                else:
+                    await ctx.send(embed=error_embed("Unexpected Response", f"Unexpected response format (HTTP {status}): `{str(data)[:200]}`"))
                 return
             if not sales_data:
                 await ctx.send(embed=info_embed("Recent Transactions", "No recent transactions found."))
                 return
 
-            description = ""
+            def _tx_created(tx):
+                try:
+                    return parse_time_str(tx.get('created')).timestamp()
+                except Exception:
+                    return 0
+            sales_data = sorted(sales_data, key=_tx_created, reverse=True)
+
+            if username:
+                # Discord display names in the server are Roblox usernames, so
+                # a mention (or raw user ID) resolves via the member's nickname.
+                mention_match = re.fullmatch(r"<@!?(\d+)>|(\d{15,20})", username.strip())
+                if mention_match and ctx.guild:
+                    member_id = int(mention_match.group(1) or mention_match.group(2))
+                    member = ctx.guild.get_member(member_id)
+                    if member is None:
+                        try:
+                            member = await ctx.guild.fetch_member(member_id)
+                        except discord.HTTPException:
+                            member = None
+                    if member is None:
+                        await ctx.send(embed=info_embed("Recent Transactions", "Couldn't find that member in this server."))
+                        return
+                    username = member.display_name
+                resolved = await _resolve_roblox_username(username)
+                if not resolved:
+                    await ctx.send(embed=info_embed("Recent Transactions", f"No Roblox user found named **{username}**."))
+                    return
+                target_id, username = resolved
+                sales_data = [
+                    tx for tx in sales_data
+                    if str(tx.get('agent', {}).get('id')) == str(target_id)
+                ]
+                if not sales_data:
+                    await ctx.send(embed=info_embed("Recent Transactions", f"No transactions found for **{username}**."))
+                    return
+                resolved_names = {tx.get('agent', {}).get('id'): username for tx in sales_data}
+            else:
+                sales_data = sales_data[:10]
+                agent_ids = []
+                for tx in sales_data:
+                    agent_id = tx.get('agent', {}).get('id')
+                    if agent_id and agent_id not in agent_ids:
+                        agent_ids.append(agent_id)
+                resolved_names = await _resolve_roblox_users(agent_ids)
+
+            entries = []
             for tx in sales_data:
                 try:
-                    buyer = tx.get('agent', {}).get('name', 'Unknown Buyer')
-                    item = tx.get('details', {}).get('name', 'Unknown Item')
-                    amount = tx.get('currency', {}).get('amount', '???')
+                    agent = tx.get('agent', {})
+                    agent_id = agent.get('id')
+                    buyer = resolved_names.get(agent_id)
+                    if not buyer or buyer == str(agent_id):
+                        buyer = agent.get('name', 'Unknown Buyer')
+                    buyer = str(buyer)[:100]
+                    item = tx.get('details', {}).get('name', 'Unknown Item')[:100]
+                    amount = str(tx.get('currency', {}).get('amount', '???'))[:20]
                     created = parse_time_str(tx.get('created'))
                     timestamp = int(created.timestamp())
-                    description += f"> **{buyer}** bought **{item}** for **{amount} Robux**\n> <t:{timestamp}:R>\n\n"
+                    entries.append(f"> **{buyer}** bought **{item}** for **{amount} Robux**\n> <t:{timestamp}:R>")
                 except Exception as inner_e:
-                    description += f"> Error parsing transaction: `{inner_e}`\n\n"
+                    entries.append(f"> Error parsing transaction: `{str(inner_e)[:80]}`")
 
-            embed = discord.Embed(title="Recent Transactions", description=description, color=BLANK_COLOR)
-            embed.set_author(name="California State Roleplay", icon_url=CSRP_ICON)
-            brand_footer(embed)
-            await ctx.send(embed=embed)
+            title = f"Recent Transactions — {username}" if username else "Recent Transactions"
+            pages = []
+            current_page = ""
+            for entry in entries:
+                if current_page and len(current_page) + len(entry) + 2 > 3800:
+                    embed = discord.Embed(title=title, description=current_page.strip(), color=BLANK_COLOR)
+                    embed.set_author(name="California State Roleplay", icon_url=CSRP_ICON)
+                    brand_footer(embed)
+                    pages.append(embed)
+                    current_page = ""
+                current_page += entry + "\n\n"
+            if current_page.strip():
+                embed = discord.Embed(title=title, description=current_page.strip(), color=BLANK_COLOR)
+                embed.set_author(name="California State Roleplay", icon_url=CSRP_ICON)
+                brand_footer(embed)
+                pages.append(embed)
+
+            if len(pages) == 1:
+                await ctx.send(embed=pages[0])
+            else:
+                view = PaginatorView(pages, ctx.author)
+                msg = await ctx.send(embed=pages[0], view=view)
+                view.message = msg
         except Exception as e:
             await ctx.send(embed=error_embed("Request Failed", f"Request failed: `{e}`"))
 

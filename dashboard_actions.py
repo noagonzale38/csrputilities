@@ -17,7 +17,8 @@ from werkzeug.utils import secure_filename
 from config import (
     INFRACTION_CHANNEL,
     REPORT_GUILD_ID,
-    SERVER_KEY,
+    HEADERS,
+    KEY_HEADERS,
     blacklisted_command,
     report_blacklists,
 )
@@ -53,7 +54,7 @@ from cogs.staffmgmt import (
 from modlog_store import count_modlogs, get_modlogs_for_user as get_modlogs_for_user_db
 
 PRC_API = "https://api.erlc.gg/v1"
-PRC_HEADERS = {"Content-Type": "application/json", "Server-Key": SERVER_KEY}
+PRC_HEADERS = HEADERS
 DEFAULT_GUILD_ID = REPORT_GUILD_ID
 ERLC_CUSTOM_ACTIONS_FILE = "dashboard_erlc_actions.json"
 MAX_ERLC_CUSTOM_ACTION_STEPS = 10
@@ -1002,8 +1003,8 @@ async def collect_dashboard_stats(bot) -> dict:
     erlc_server = {}
     erlc_players = []
     try:
-        _, erlc_server = await api_get(f"{PRC_API}/server", headers={"Server-Key": SERVER_KEY})
-        _, erlc_players = await api_get(f"{PRC_API}/server/players", headers={"Server-Key": SERVER_KEY})
+        _, erlc_server = await api_get(f"{PRC_API}/server", headers=KEY_HEADERS)
+        _, erlc_players = await api_get(f"{PRC_API}/server/players", headers=KEY_HEADERS)
     except Exception:
         pass
 
@@ -1027,14 +1028,14 @@ async def collect_dashboard_stats(bot) -> dict:
 
 
 async def fetch_erlc_players() -> list[dict]:
-    status, players = await api_get(f"{PRC_API}/server/players", headers={"Server-Key": SERVER_KEY})
+    status, players = await api_get(f"{PRC_API}/server/players", headers=KEY_HEADERS)
     if status != 200 or not isinstance(players, list):
         raise RuntimeError("Failed to fetch ERLC players.")
     return players
 
 
 async def fetch_erlc_server() -> dict:
-    status, data = await api_get(f"{PRC_API}/server", headers={"Server-Key": SERVER_KEY})
+    status, data = await api_get(f"{PRC_API}/server", headers=KEY_HEADERS)
     if status != 200 or not isinstance(data, dict):
         raise RuntimeError("Failed to fetch ERLC server information.")
     return data

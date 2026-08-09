@@ -32,7 +32,7 @@ export default function Home() {
         </div>
         <div className="login-card">
           <div className="login-brand">
-            <img src="https://csrptickets-storage.s3.us-east-1.amazonaws.com/csrp.png" alt="CSRP Utilities Logo" width="112" />
+            <img src="https://csrptickets-storage.s3.us-east-1.amazonaws.com/018b50d0d885271446f02f157fe8e00a.png" alt="CSRP Utilities Logo" width="112" />
             <span>CSRP Utilities</span>
           </div>
           <p className="auth-eyebrow">CALIFORNIA STATE ROLEPLAY</p>

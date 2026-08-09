@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import asyncio
+import contextlib
 import json
 import re
 import time
@@ -11,12 +12,19 @@ from typing import Optional
 from config import INFRACTION_CHANNEL, feedback_blacklists, is_bot_dev
 from cogs.helpers import (
     BLANK_COLOR, CSRP_ICON,
-    brand_footer, success_embed, error_embed, warning_embed, embed_description, ConfirmView, user_tag,
+    brand_footer, success_embed, error_embed, warning_embed, loading_embed, embed_description, ConfirmView, user_tag,
 )
 from cogs.moderation import build_infraction_embed
-from cogs.settings import get_guild_settings, has_setting_permission, RANK_ORDER, member_has_rank_or_higher
+from cogs.settings import (
+    get_guild_settings, update_guild_setting, has_setting_permission, RANK_ORDER, member_has_rank_or_higher,
+    get_permission_role_ids, get_permission_user_ids,
+)
 
 RETIREMENTS_FILE = "retirements.json"
+ROLE_GROUP_MAX_IDS = 100
+ROLE_GROUP_PROGRESS_EVERY = 10
+ROLE_GROUP_FAILURE_PREVIEW = 10
+USER_ID_TOKEN_RE = re.compile(r"<@!?(\d{15,20})>|(\d{15,20})")
 STAFF_FEEDBACK_STATS_FILE = Path(__file__).resolve().parent.parent / "staff_feedback_stats.json"
 BASE_ROLE_BY_RANK = {
     "Senior Management": 1131166127964291172,
@@ -49,6 +57,9 @@ RATING_PATTERNS = (
     re.compile(r"\b(10|[1-9])\s*/\s*10\b"),
 )
 MENTION_PATTERN = re.compile(r"<@!?(\d+)>")
+FEEDBACK_MESSAGE_LINK_RE = re.compile(
+    r"https?://(?:ptb\.|canary\.)?discord(?:app)?\.com/channels/(\d+)/(\d+)/(\d+)"
+)
 
 
 def load_retirements() -> dict:
@@ -248,6 +259,7 @@ def _build_empty_feedback_cache(channel_id: int) -> dict:
         "last_synced_at": None,
         "members": {},
         "entries": {},
+        "voided": {},
     }
 
 
@@ -309,8 +321,41 @@ def _save_feedback_entry(guild_id: int, channel_id: int, message_id: int, staff_
         cache = _build_empty_feedback_cache(channel_id)
         data[guild_key] = cache
 
+    if _is_feedback_voided(cache, message_id):
+        return
+
     _record_feedback_entry(cache, message_id, staff_user_id, rating)
     save_staff_feedback_stats(data)
+
+
+def _is_feedback_voided(cache: dict, message_id: int) -> bool:
+    voided = cache.get("voided")
+    return isinstance(voided, dict) and str(message_id) in voided
+
+
+def _void_feedback_entry_for_guild(guild_id: int, channel_id: int, message_id: int, voided_by: int) -> bool:
+    data = load_staff_feedback_stats()
+    guild_key = str(guild_id)
+    cache = data.get(guild_key)
+    if not isinstance(cache, dict) or int(cache.get("channel_id", 0) or 0) != channel_id:
+        cache = _build_empty_feedback_cache(channel_id)
+        data[guild_key] = cache
+
+    removed = _remove_feedback_entry(cache, message_id)
+    voided = cache.setdefault("voided", {})
+    voided[str(message_id)] = {
+        "voided_by": str(voided_by),
+        "voided_at": int(time.time()),
+    }
+    save_staff_feedback_stats(data)
+    return removed
+
+
+def _member_is_bot_dev(member: discord.Member) -> bool:
+    if member.id in set(get_permission_user_ids(member.guild.id, "bot_dev")):
+        return True
+    member_role_ids = {role.id for role in getattr(member, "roles", [])}
+    return bool(member_role_ids & set(get_permission_role_ids(member.guild.id, "bot_dev")))
 
 
 def _set_feedback_cache_for_guild(guild_id: int, cache: dict):
@@ -372,6 +417,35 @@ def _remove_feedback_entry_for_guild(guild_id: int, channel_id: int, message_id:
     return True
 
 
+def _parse_user_id_list(raw: str) -> tuple[list[int], list[str]]:
+    """Split a comma (or whitespace) separated list into unique user IDs plus bad tokens."""
+    user_ids: list[int] = []
+    invalid: list[str] = []
+    seen: set[int] = set()
+    for chunk in re.split(r"[,\s]+", raw.strip()):
+        if not chunk:
+            continue
+        match = USER_ID_TOKEN_RE.fullmatch(chunk)
+        if not match:
+            invalid.append(chunk)
+            continue
+        user_id = int(match.group(1) or match.group(2))
+        if user_id not in seen:
+            seen.add(user_id)
+            user_ids.append(user_id)
+    return user_ids, invalid
+
+
+def _dedupe_roles(*roles: Optional[discord.Role]) -> list[discord.Role]:
+    unique: list[discord.Role] = []
+    seen: set[int] = set()
+    for role in roles:
+        if role is not None and role.id not in seen:
+            seen.add(role.id)
+            unique.append(role)
+    return unique
+
+
 def _get_target_role_ids(
     settings: dict,
     retirement: dict,
@@ -417,6 +491,13 @@ def _get_member_highest_rank(member: discord.Member, settings: dict) -> Optional
     rank_roles = settings.get("rank_roles", {})
     role_to_rank = {role_id: rank for rank, role_id in rank_roles.items() if role_id is not None}
 
+    for rank in reversed(RANK_ORDER):
+        if rank_roles.get(rank) is not None:
+            continue
+        base_role_id = BASE_ROLE_BY_RANK.get(rank)
+        if base_role_id and base_role_id not in role_to_rank:
+            role_to_rank[base_role_id] = rank
+
     highest_rank = None
     highest_rank_index = len(RANK_ORDER)
     for role in member.roles:
@@ -460,6 +541,74 @@ def _rank_related_role_ids(settings: dict, rank: str) -> set[int]:
     return role_ids
 
 
+STAFF_FEEDBACK_STICKY_HEADER = "<:CSRP:1170178385595609158> **| Staff Feedback Rules & Regulations**"
+
+
+def _build_staff_feedback_sticky_embed(guild: discord.Guild) -> discord.Embed:
+    embed = discord.Embed(
+        description=(
+            f"{STAFF_FEEDBACK_STICKY_HEADER}\n\n"
+            "When writing staff feedback, you must abide by these rules:\n\n"
+            "- When writing feedback, send it through the `/staff_feedback` command.\n"
+            "- Feedback must be about a legitimate staff encounter, in-discord or in-game.\n"
+            "- When leaving feedback, please ensure you are rating the correct staff member. "
+            "If you're unsure, it's better to not leave feedback at all then leave false feedback.\n"
+            "- Reasons for feedback must be legitimate. Reasons like \"Nerdy\" or \"Looks annoying\" are "
+            "**__not__** valid reasons and will result in the feedback being voided. The mentioned reasons "
+            "are examples and does not include the full list of regulated reasons.\n"
+            "- Please do not copy and paste exact feedbacks. While the same rating for the same "
+            "encounter/session is permitted, exact copying of feedback isn't.\n"
+            "- Feedback MUST abide by our Discord Rules posted in <#968856298328301618>.\n\n"
+            "Failure to follow these guidelines may result in moderation. If you have any questions about "
+            "these guidelines, please open a ticket in <#968858972398436402>."
+        ),
+        color=BLANK_COLOR,
+    )
+    embed.set_author(name=guild.name, icon_url=guild.icon.url if guild.icon else CSRP_ICON)
+    brand_footer(embed)
+    return embed
+
+
+def _is_staff_feedback_sticky_message(bot, message: discord.Message) -> bool:
+    if message.author.id != bot.user.id or not message.embeds:
+        return False
+    return (message.embeds[0].description or "").startswith(STAFF_FEEDBACK_STICKY_HEADER)
+
+
+_staff_feedback_sticky_lock = asyncio.Lock()
+
+
+async def ensure_staff_feedback_sticky_message(channel) -> None:
+    guild = channel.guild
+    async with _staff_feedback_sticky_lock:
+        settings = get_guild_settings(guild.id)
+        sticky_message_id = settings.get("staff_feedback_sticky_message_id")
+        if sticky_message_id:
+            with contextlib.suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
+                await channel.fetch_message(int(sticky_message_id))
+                return
+
+        message = await channel.send(embed=_build_staff_feedback_sticky_embed(guild))
+        update_guild_setting(guild.id, "staff_feedback_sticky_message_id", message.id)
+
+
+async def refresh_staff_feedback_sticky_message(channel) -> None:
+    guild = channel.guild
+    async with _staff_feedback_sticky_lock:
+        settings = get_guild_settings(guild.id)
+        sticky_message_id = settings.get("staff_feedback_sticky_message_id")
+        if sticky_message_id:
+            # A refresh queued behind the lock may find the sticky already reposted.
+            if channel.last_message_id == int(sticky_message_id):
+                return
+            with contextlib.suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
+                old_message = await channel.fetch_message(int(sticky_message_id))
+                await old_message.delete()
+
+        message = await channel.send(embed=_build_staff_feedback_sticky_embed(guild))
+        update_guild_setting(guild.id, "staff_feedback_sticky_message_id", message.id)
+
+
 class StaffManagement(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -492,9 +641,13 @@ class StaffManagement(commands.Cog):
         feedback_channel,
         progress_message: discord.Message,
     ) -> tuple[dict, int, int]:
+        previous_cache, _ = await _ensure_staff_feedback_cache(feedback_channel)
+        voided_entries = dict(previous_cache.get("voided", {})) if isinstance(previous_cache, dict) else {}
+
         oldest_messages = [message async for message in feedback_channel.history(limit=1, oldest_first=True)]
         if not oldest_messages:
             cache = _build_empty_feedback_cache(feedback_channel.id)
+            cache["voided"] = voided_entries
             _finalize_feedback_cache(cache)
             _set_feedback_cache_for_guild(feedback_channel.guild.id, cache)
             return cache, 0, 0
@@ -505,6 +658,7 @@ class StaffManagement(commands.Cog):
         total_span = max(newest_timestamp - oldest_timestamp, 0)
 
         cache = _build_empty_feedback_cache(feedback_channel.id)
+        cache["voided"] = voided_entries
         progress_state = {
             "processed": 0,
             "recorded": 0,
@@ -540,6 +694,9 @@ class StaffManagement(commands.Cog):
             async for message in feedback_channel.history(limit=None, oldest_first=True):
                 progress_state["processed"] += 1
 
+                if _is_feedback_voided(cache, message.id):
+                    continue
+
                 target_user_id = _extract_feedback_target_user_id(message)
                 rating = _extract_feedback_rating_from_message(message)
                 if target_user_id is not None and rating is not None:
@@ -564,13 +721,29 @@ class StaffManagement(commands.Cog):
         return cache, progress_state["processed"], progress_state["recorded"]
 
     @commands.Cog.listener()
+    async def on_ready(self):
+        for guild in self.bot.guilds:
+            channel = await self._resolve_feedback_channel(guild)
+            if channel is not None:
+                await ensure_staff_feedback_sticky_message(channel)
+
+    @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if message.guild is None or message.author.bot:
+        if message.guild is None:
             return
 
         settings = get_guild_settings(message.guild.id)
         feedback_channel_id = settings.get("staff_feedback_channel")
         if feedback_channel_id != message.channel.id:
+            return
+
+        if (
+            settings.get("staff_feedback_sticky_message_id") != message.id
+            and not _is_staff_feedback_sticky_message(self.bot, message)
+        ):
+            await refresh_staff_feedback_sticky_message(message.channel)
+
+        if message.author.bot:
             return
 
         target_user_id = _extract_feedback_target_user_id(message)
@@ -593,6 +766,115 @@ class StaffManagement(commands.Cog):
 
         for message_id in payload.message_ids:
             _remove_feedback_entry_for_guild(payload.guild_id, payload.channel_id, message_id)
+
+    async def _apply_feedback_void(
+        self,
+        guild: discord.Guild,
+        actor: discord.Member,
+        message_id: int,
+        channel_id: Optional[int] = None,
+    ) -> discord.Embed:
+        feedback_channel = await self._resolve_feedback_channel(guild)
+        if not feedback_channel:
+            return error_embed("Channel Not Found", "The configured staff feedback channel could not be found.")
+
+        if channel_id is not None and channel_id != feedback_channel.id:
+            return error_embed(
+                "Not A Feedback Message",
+                f"That message is not in the staff feedback channel ({feedback_channel.mention}).",
+            )
+
+        delete_status = "Deleted"
+        try:
+            await feedback_channel.get_partial_message(message_id).delete()
+        except discord.NotFound:
+            delete_status = "Already Deleted"
+        except (discord.Forbidden, discord.HTTPException):
+            delete_status = "Delete Failed"
+
+        removed = _void_feedback_entry_for_guild(guild.id, feedback_channel.id, message_id, actor.id)
+
+        return success_embed(
+            "Feedback Voided",
+            (
+                f"> **Message ID:** `{message_id}`\n"
+                f"> **Message:** `{delete_status}`\n"
+                f"> **Rating Removed From Stats:** `{'Yes' if removed else 'No (was not recorded)'}`\n"
+                f"> **Voided By:** {actor.mention}\n\n"
+                "This message will no longer count towards feedback ratings, even after a feedback sync."
+            ),
+        )
+
+    @commands.Cog.listener("on_message")
+    async def on_void_feedback_reply(self, message: discord.Message):
+        if message.guild is None or message.author.bot or message.reference is None:
+            return
+
+        content = (message.content or "").strip()
+        if not re.fullmatch(rf"<@!?{self.bot.user.id}>\s+void_feedback", content, re.IGNORECASE):
+            return
+
+        if not isinstance(message.author, discord.Member) or not _member_is_bot_dev(message.author):
+            await message.reply(
+                embed=error_embed("Not Permitted", "Only bot developers can void feedback."),
+                delete_after=10,
+                mention_author=False,
+            )
+            return
+
+        target_message_id = message.reference.message_id
+        if not target_message_id:
+            await message.reply(
+                embed=error_embed("Message Not Found", "I couldn't resolve the message you replied to."),
+                delete_after=10,
+                mention_author=False,
+            )
+            return
+
+        embed = await self._apply_feedback_void(
+            message.guild,
+            message.author,
+            target_message_id,
+            channel_id=message.reference.channel_id,
+        )
+        try:
+            await message.delete()
+        except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+            pass
+        await message.channel.send(embed=embed, delete_after=10)
+
+    @commands.hybrid_group(name="feedback", description="Staff feedback management commands.")
+    async def feedback(self, ctx: commands.Context):
+        if ctx.invoked_subcommand is None:
+            await ctx.send(embed=error_embed("Unknown Subcommand", "Use `/feedback void` to void a feedback message."))
+
+    @feedback.command(name="void", description="Delete a feedback message and void it so it no longer counts towards ratings.")
+    @is_bot_dev()
+    @app_commands.describe(message="A message link or message ID of the feedback message to void")
+    async def feedback_void(self, ctx: commands.Context, *, message: str):
+        if ctx.guild is None:
+            await ctx.send(embed=error_embed("Server Only", "This command can only be used in a server."))
+            return
+
+        if ctx.interaction and not ctx.interaction.response.is_done():
+            await ctx.defer(ephemeral=True)
+
+        reference = message.strip().strip("<>")
+        channel_id = None
+        link_match = FEEDBACK_MESSAGE_LINK_RE.search(reference)
+        if link_match:
+            link_guild_id, channel_id, message_id = (int(group) for group in link_match.groups())
+            if link_guild_id != ctx.guild.id:
+                await ctx.send(embed=error_embed("Invalid Link", "That message link points to a different server."))
+                return
+        elif reference.isdigit():
+            message_id = int(reference)
+        else:
+            await ctx.send(embed=error_embed("Invalid Input", "Provide a Discord message link or a message ID."))
+            return
+
+        embed = await self._apply_feedback_void(ctx.guild, ctx.author, message_id, channel_id=channel_id)
+        await ctx.send(embed=embed, ephemeral=True, delete_after=10)
 
     @commands.hybrid_command(name="retire", description="Retire a staff member, removing their staff roles.")
     @app_commands.describe(user="The staff member to retire")
@@ -1080,6 +1362,171 @@ class StaffManagement(commands.Cog):
                 embed=discord.Embed(title="Action Timed Out", description="The action has timed out.", color=BLANK_COLOR),
                 view=None,
             )
+
+    @commands.hybrid_command(name="role-group", description="Add and/or remove up to three roles for a list of user IDs.")
+    @app_commands.describe(
+        user_ids="Comma separated list of user IDs to update",
+        role_add="Role to add to every listed user",
+        role_remove="Role to remove from every listed user",
+        role_add_2="Second role to add to every listed user",
+        role_remove_2="Second role to remove from every listed user",
+        role_add_3="Third role to add to every listed user",
+        role_remove_3="Third role to remove from every listed user",
+    )
+    @commands.has_permissions(manage_roles=True)
+    async def role_group(
+        self,
+        ctx: commands.Context,
+        user_ids: str,
+        role_add: Optional[discord.Role] = None,
+        role_remove: Optional[discord.Role] = None,
+        role_add_2: Optional[discord.Role] = None,
+        role_remove_2: Optional[discord.Role] = None,
+        role_add_3: Optional[discord.Role] = None,
+        role_remove_3: Optional[discord.Role] = None,
+    ):
+        if ctx.guild is None:
+            await ctx.send(embed=error_embed("Server Only", "This command can only be used in a server."))
+            return
+
+        add_roles = _dedupe_roles(role_add, role_add_2, role_add_3)
+        remove_roles = _dedupe_roles(role_remove, role_remove_2, role_remove_3)
+
+        if not add_roles and not remove_roles:
+            await ctx.send(embed=error_embed(
+                "No Roles Selected",
+                "You must select at least one role to add or remove.",
+            ))
+            return
+
+        overlap = [role for role in add_roles if any(role.id == other.id for other in remove_roles)]
+        if overlap:
+            await ctx.send(embed=error_embed(
+                "Conflicting Roles",
+                f"You cannot add and remove the same role: {', '.join(role.mention for role in overlap)}",
+            ))
+            return
+
+        target_ids, invalid_tokens = _parse_user_id_list(user_ids)
+        if not target_ids:
+            await ctx.send(embed=error_embed(
+                "No User IDs",
+                "You must supply at least one valid user ID, separated by commas.",
+            ))
+            return
+
+        if len(target_ids) > ROLE_GROUP_MAX_IDS:
+            await ctx.send(embed=error_embed(
+                "Too Many Users",
+                f"You supplied **{len(target_ids)}** user IDs, but the limit is **{ROLE_GROUP_MAX_IDS}** per run. Split the list into smaller batches.",
+            ))
+            return
+
+        me = ctx.guild.me
+        if me is None or not me.guild_permissions.manage_roles:
+            await ctx.send(embed=error_embed("Missing Permissions", "I don't have the **Manage Roles** permission in this server."))
+            return
+
+        all_roles = add_roles + remove_roles
+        unmanageable = [role for role in all_roles if role.is_default() or role.managed or role >= me.top_role]
+        if unmanageable:
+            await ctx.send(embed=error_embed(
+                "Role Not Manageable",
+                f"I cannot manage these roles: {', '.join(role.mention for role in unmanageable)}",
+            ))
+            return
+
+        if ctx.author.id != ctx.guild.owner_id:
+            above_author = [role for role in all_roles if role >= ctx.author.top_role]
+            if above_author:
+                await ctx.send(embed=error_embed(
+                    "Insufficient Rank",
+                    f"These roles are not below your highest role: {', '.join(role.mention for role in above_author)}",
+                ))
+                return
+
+        if ctx.interaction and not ctx.interaction.response.is_done():
+            await ctx.defer()
+
+        progress_message = await ctx.send(embed=loading_embed(
+            "Applying Roles",
+            f"Processing **0/{len(target_ids)}** users...",
+        ))
+
+        reason = f"/role-group by {ctx.author} ({ctx.author.id})"[:512]
+        updated = 0
+        unchanged = 0
+        failures: list[str] = []
+
+        for index, user_id in enumerate(target_ids, start=1):
+            member = ctx.guild.get_member(user_id)
+            if member is None:
+                try:
+                    member = await ctx.guild.fetch_member(user_id)
+                except discord.NotFound:
+                    failures.append(f"`{user_id}` - not in this server")
+                    continue
+                except discord.HTTPException:
+                    failures.append(f"`{user_id}` - could not be fetched")
+                    continue
+
+            member_role_ids = {role.id for role in member.roles}
+            to_add = [role for role in add_roles if role.id not in member_role_ids]
+            to_remove = [role for role in remove_roles if role.id in member_role_ids]
+
+            if not to_add and not to_remove:
+                unchanged += 1
+            else:
+                try:
+                    if to_add:
+                        await member.add_roles(*to_add, reason=reason)
+                    if to_remove:
+                        await member.remove_roles(*to_remove, reason=reason)
+                except discord.Forbidden:
+                    failures.append(f"{user_tag(member)} - missing permissions")
+                    continue
+                except discord.HTTPException:
+                    failures.append(f"{user_tag(member)} - Discord rejected the change")
+                    continue
+                updated += 1
+
+            if index % ROLE_GROUP_PROGRESS_EVERY == 0 and index != len(target_ids):
+                with contextlib.suppress(discord.HTTPException):
+                    await progress_message.edit(embed=loading_embed(
+                        "Applying Roles",
+                        f"Processing **{index}/{len(target_ids)}** users...",
+                    ))
+
+        summary_lines = [
+            f"> **Users Updated:** `{updated}`",
+            f"> **Already Correct:** `{unchanged}`",
+            f"> **Failed:** `{len(failures)}`",
+        ]
+        if add_roles:
+            summary_lines.append(f"> **Roles Added:** {', '.join(role.mention for role in add_roles)}")
+        if remove_roles:
+            summary_lines.append(f"> **Roles Removed:** {', '.join(role.mention for role in remove_roles)}")
+        if invalid_tokens:
+            preview = ", ".join(f"`{token}`" for token in invalid_tokens[:ROLE_GROUP_FAILURE_PREVIEW])
+            extra = len(invalid_tokens) - ROLE_GROUP_FAILURE_PREVIEW
+            if extra > 0:
+                preview += f" and {extra} more"
+            summary_lines.append(f"> **Ignored Entries:** {preview}")
+
+        sections = ["\n".join(summary_lines)]
+        if failures:
+            failure_preview = "\n".join(f"> {entry}" for entry in failures[:ROLE_GROUP_FAILURE_PREVIEW])
+            extra = len(failures) - ROLE_GROUP_FAILURE_PREVIEW
+            if extra > 0:
+                failure_preview += f"\n> ...and {extra} more"
+            sections.append(f"**Failures**\n{failure_preview}")
+
+        builder = warning_embed if failures else success_embed
+        summary_embed = builder("Role Group Complete", embed_description(*sections))
+        summary_embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else CSRP_ICON)
+
+        with contextlib.suppress(discord.HTTPException):
+            await progress_message.edit(embed=summary_embed)
 
     @commands.hybrid_command(name="feedbacksync", description="Sync the full staff feedback channel history into the cache.")
     @is_bot_dev()

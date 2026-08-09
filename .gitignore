@@ -61,6 +61,8 @@ retirements.json
 ship_stats.json
 staff_feedback_stats.json
 testing_users.json
+trainee_tracking.json
 
 # Accidental version-marker files
 =*
+phone_data.json

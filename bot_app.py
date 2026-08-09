@@ -44,10 +44,17 @@ if not os.path.exists(afk_file):
     with open(afk_file, "w") as f:
         json.dump({}, f)
 
-intents = discord.Intents.all()
+intents = discord.Intents.default()
+intents.members = True
+intents.message_content = True
 
 install_components_v2_transport()
-bot = commands.Bot(command_prefix="-", help_command=None, intents=intents)
+bot = commands.Bot(
+    command_prefix="-",
+    help_command=None,
+    intents=intents,
+    owner_ids={1213915425369227334, 828951190527803393, 1406554201861001239, 793162371702194207},
+)
 console_task = None
 active_console_sessions: dict[int, "JskConsoleView"] = {}
 JSK_RESTART_ALLOWED_USER_ID = 654110914311618561
@@ -86,10 +93,75 @@ def _tail_text(value: str, limit: int) -> str:
     return "...\n" + value[-limit:]
 
 
+# Guardrails for the console, not a sandbox: the shell inherits the bot's
+# environment (including tokens), so secret access and host-destroying
+# commands are refused up front. Determined bypasses are still possible.
+BLOCKED_CONSOLE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    # Secrets / credentials
+    (re.compile(r"(^|[\s'\"=/])\.env(\.\w+)?\b"), ".env files are off-limits"),
+    (re.compile(r"\bprintenv\b"), "dumping environment variables is blocked"),
+    (re.compile(r"^(sudo\s+)?(env|set|export|declare)\s*(\||>|$)"), "dumping environment variables is blocked"),
+    (re.compile(r"/proc/[\w/]*environ"), "reading process environments is blocked"),
+    (
+        re.compile(r"\$\{?\w*(TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|WEBHOOK)\w*\}?", re.IGNORECASE),
+        "expanding secret environment variables is blocked",
+    ),
+    (re.compile(r"\.ssh(/|\b)"), "the .ssh directory is off-limits"),
+    (re.compile(r"\bid_(rsa|ed25519|ecdsa|dsa)\b"), "SSH private keys are off-limits"),
+    (re.compile(r"/etc/(shadow|sudoers|gshadow)"), "system credential files are off-limits"),
+    # Destructive filesystem operations
+    (re.compile(r"--no-preserve-root"), "--no-preserve-root is blocked"),
+    (
+        re.compile(r"\brm\b[^|;&]*\s(/|/\*|~|~/|\$HOME|\.|\.\.|\*)([\s;|&]|$)"),
+        "deleting critical paths is blocked",
+    ),
+    (re.compile(r"\b(mkfs(\.\w+)?|wipefs|blkdiscard|shred)\b"), "disk formatting/wiping tools are blocked"),
+    (re.compile(r"\bdd\b[^|;&]*\bof=/dev/"), "writing to raw devices is blocked"),
+    (re.compile(r">+\s*/dev/(sd|nvme|xvd|vd|mmcblk|hd)"), "writing to raw devices is blocked"),
+    (re.compile(r"\bch(mod|own)\b[^|;&]*\s(/|/\*)([\s;|&]|$)"), "recursive permission changes on / are blocked"),
+    # Host / process sabotage
+    (re.compile(r":\s*\(\s*\)\s*\{"), "fork bombs are blocked"),
+    (re.compile(r"^(sudo\s+)?(shutdown|reboot|poweroff|halt)\b"), "shutting down the host is blocked"),
+    (
+        re.compile(r"\bsystemctl\s+(poweroff|reboot|halt|suspend|hibernate|emergency)\b"),
+        "shutting down the host is blocked",
+    ),
+    (re.compile(r"\binit\s+[06]\b"), "shutting down the host is blocked"),
+    (re.compile(r"\bkill\s+(-\w+\s+)*-1\b"), "killing all processes is blocked"),
+    (re.compile(r"\bkillall\b"), "killall is blocked"),
+    (re.compile(r"\bpm2\s+(kill|delete)\b"), "killing the bot's pm2 process is blocked"),
+    (re.compile(r"\bcrontab\s+[^|;&]*-r\b"), "removing the crontab is blocked"),
+    # Account / network tampering
+    (
+        re.compile(r"\b(useradd|userdel|usermod|adduser|deluser|passwd|visudo)\b"),
+        "account management commands are blocked",
+    ),
+    (re.compile(r"\biptables\b[^|;&]*(\s-F\b|--flush)"), "flushing firewall rules is blocked"),
+    (re.compile(r"\bufw\s+disable\b"), "disabling the firewall is blocked"),
+    # Remote code execution
+    (re.compile(r"\b(curl|wget)\b[^|;&]*\|[^|;&]*\b(ba|z|da)?sh\b"), "piping downloads into a shell is blocked"),
+]
+
+
+def _blocked_command_reason(command: str) -> str | None:
+    normalized = " ".join(command.strip().split())
+    for pattern, reason in BLOCKED_CONSOLE_PATTERNS:
+        if pattern.search(normalized):
+            return reason
+    return None
+
+
 async def _can_use_jsk_restart(ctx: commands.Context) -> bool:
     if await bot.is_owner(ctx.author):
         return True
     return ctx.author.id == JSK_RESTART_ALLOWED_USER_ID
+
+
+async def _is_bot_owner_account(ctx: commands.Context) -> bool:
+    """Restrict a command to BOT_OWNER_ID only, ignoring the wider owner_ids set."""
+    if ctx.author.id != BOT_OWNER_ID:
+        raise commands.NotOwner("Only the bot owner can use this command.")
+    return True
 
 
 class TerminalCommandModal(discord.ui.Modal, title="Run Terminal Command"):
@@ -278,6 +350,13 @@ class JskConsoleView(discord.ui.View):
             await interaction.response.send_message("Command cannot be empty.", ephemeral=True)
             return
 
+        blocked_reason = _blocked_command_reason(command)
+        if blocked_reason:
+            self.last_input = f"[blocked] {command}"
+            await interaction.response.send_message(f"⛔ Command blocked: {blocked_reason}.", ephemeral=True)
+            await self.refresh_message(force=True)
+            return
+
         self.last_input = command
         try:
             await self._write_bytes((command + "\n").encode("utf-8"))
@@ -294,6 +373,13 @@ class JskConsoleView(discord.ui.View):
             payload = bytes(payload_text, "utf-8").decode("unicode_escape").encode("utf-8")
         except UnicodeDecodeError:
             await interaction.response.send_message("Invalid escape sequence in raw input.", ephemeral=True)
+            return
+
+        blocked_reason = _blocked_command_reason(payload.decode("utf-8", errors="replace"))
+        if blocked_reason:
+            self.last_input = "[blocked] " + payload_text.replace("\n", "\\n")[:80]
+            await interaction.response.send_message(f"⛔ Input blocked: {blocked_reason}.", ephemeral=True)
+            await self.refresh_message(force=True)
             return
 
         self.last_input = payload_text.replace("\n", "\\n")
@@ -441,7 +527,6 @@ COGS = [
     "cogs.sessions",
     "cogs.training",
     "cogs.fun",
-    "cogs.music",
     "cogs.utility",
     "cogs.embed_creator",
     "cogs.admin",
@@ -451,6 +536,8 @@ COGS = [
     "cogs.staffmgmt",
     "cogs.punishments",
     "cogs.on_command_error",
+    "cogs.phone",
+    "cogs.applications",
 ]
 
 
@@ -639,6 +726,23 @@ async def _pm2_restart_bot(delay: float = 1.0):
         logging.exception("Failed to restart bot with pm2: %s", exc)
 
 
+def _restrict_jsk_shell_subcommand():
+    """Lock `jsk shell` (and aliases like `sh`/`bash`) to BOT_OWNER_ID only."""
+    jsk_command = bot.get_command("jsk")
+    if jsk_command is None or not getattr(jsk_command, "get_command", None):
+        logging.warning("Unable to restrict jsk shell: jsk command not found.")
+        return
+
+    shell_command = jsk_command.get_command("shell")
+    if shell_command is None:
+        logging.warning("Unable to restrict jsk shell: jsk shell command not found.")
+        return
+
+    if _is_bot_owner_account not in shell_command.checks:
+        shell_command.add_check(_is_bot_owner_account)
+        logging.info("Restricted jsk shell to the bot owner.")
+
+
 def _register_jsk_restart_subcommand():
     jsk_command = bot.get_command("jsk")
     if jsk_command is None:
@@ -706,6 +810,7 @@ async def setup_hook():
     await load_cogs()
     try:
         await bot.load_extension("jishaku")
+        _restrict_jsk_shell_subcommand()
         _register_jsk_restart_subcommand()
     except Exception:
         pass

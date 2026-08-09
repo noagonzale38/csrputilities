@@ -129,6 +129,7 @@ DEFAULT_SETTINGS = {
     "feedback_enabled": False,
     "feedback_questions": ["Why did you decide to leave?"],
     "staff_feedback_channel": None,
+    "staff_feedback_sticky_message_id": None,
     "partnership_log_channel": None,
     "partnership_allowed_roles": [],
     "embed_allowed_roles": [],

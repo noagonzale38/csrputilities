@@ -9,7 +9,8 @@ import random
 from datetime import timedelta
 
 from config import (
-    INFRACTION_CHANNEL, is_moderation, is_role_authorized, is_bot_dev, BOT_OWNER_ID,
+    INFRACTION_CHANNEL, APPEALS_CHANNEL_ID, is_moderation, is_role_authorized, is_bot_dev,
+    RESTRICTION_BYPASS_USER_IDS,
 )
 from cogs.helpers import (
     Colors, BLANK_COLOR, CSRP_ICON, CSRP_BANNER, CHECK, CROSS, PENDING,
@@ -20,6 +21,8 @@ from cogs.settings import get_permission_role_ids
 from modlog_store import (
     clear_all_modlogs as clear_all_modlogs_db,
     clear_user_modlogs as clear_user_modlogs_db,
+    delete_modlog_by_case as delete_modlog_by_case_db,
+    get_modlog_by_case as get_modlog_by_case_db,
     get_modlogs_for_user as get_modlogs_for_user_db,
     get_next_case as get_next_case_db,
     save_modlog as save_modlog_db,
@@ -177,14 +180,6 @@ def _build_moderation_sync_embed(
     return embed
 
 
-def extract_ignore_restrictions_flag(text: str):
-    flag = "--ignore-restrictions"
-    bypass_requested = flag in text
-    cleaned_text = re.sub(r"\s*--ignore-restrictions\s*", " ", text).strip()
-    cleaned_text = re.sub(r"\s{2,}", " ", cleaned_text)
-    return cleaned_text, bypass_requested
-
-
 def build_infraction_embed(user: discord.abc.User, action: str, reason: str, signed_by: discord.Member) -> discord.Embed:
     infraction_embed = discord.Embed(
         color=discord.Color.blue(),
@@ -222,17 +217,9 @@ class Moderation(commands.Cog):
         moderation_role_ids = set(get_permission_role_ids(member.guild.id, "moderation"))
         return bool({role.id for role in member.roles} & moderation_role_ids)
 
-    async def _resolve_restriction_bypass(self, ctx, text: str):
-        cleaned_text, bypass_requested = extract_ignore_restrictions_flag(text)
-        if bypass_requested and ctx.author.id != BOT_OWNER_ID:
-            await ctx.send(
-                embed=error_embed(
-                    "Unauthorized Flag",
-                    "Only the bot owner can use `--ignore-restrictions`.",
-                )
-            )
-            return None, None
-        return cleaned_text, bypass_requested
+    @staticmethod
+    def _bypasses_restrictions(ctx) -> bool:
+        return ctx.author.id in RESTRICTION_BYPASS_USER_IDS
 
     async def _resolve_infraction_target(self, guild: discord.Guild, value: str) -> discord.abc.User:
         raw_value = str(value or "").strip()
@@ -261,6 +248,35 @@ class Moderation(commands.Cog):
         raise commands.BadArgument(
             f"Could not find a server member or Discord user matching `{raw_value}`. Use a user ID or mention."
         )
+
+    @commands.hybrid_command(name="void", description="Void a specific case and remove it from the user's modlogs.")
+    @is_moderation()
+    @app_commands.describe(case_number="The case number to void")
+    async def void(self, ctx, case_number: int):
+        log = get_modlog_by_case_db(case_number)
+        if log is None:
+            await ctx.send(embed=error_embed("Case Not Found", f"No case found with number `#{case_number}`."))
+            return
+
+        if not delete_modlog_by_case_db(case_number):
+            await ctx.send(embed=error_embed("Void Failed", f"Failed to void case `#{case_number}`. Please try again."))
+            return
+
+        embed = discord.Embed(
+            title="Case Voided",
+            description=(
+                f"Case `#{case_number}` has been voided and removed from <@{log['user_id']}>'s modlogs.\n\n"
+                f"> **Action:** {log['action'].capitalize()}\n"
+                f"> **Reason:** {log['reason']}\n"
+                f"> **Moderator:** <@{log['moderator_id']}>\n"
+                f"> **Date:** <t:{log['timestamp']}:f>\n"
+                f"> **Voided By:** {ctx.author.mention}"
+            ),
+            color=BLANK_COLOR,
+        )
+        embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else "")
+        brand_footer(embed)
+        await ctx.send(embed=embed)
 
     @commands.hybrid_command(name="clear_modlogs", description="Clear modlogs for a specific user.")
     @is_moderation()
@@ -526,9 +542,13 @@ class Moderation(commands.Cog):
     @commands.hybrid_command(name="kick", description="Kicks a member from the server.")
     @is_moderation()
     @app_commands.describe(user="The user to kick", reason="The reason for kicking the user")
-    async def kick(self, ctx, user: discord.Member, *, reason: str):
+    async def kick(self, ctx, user: discord.Member, *, reason: str | None = None):
         if self._is_protected_moderator(user):
             await ctx.send(embed=error_embed("Cannot Kick User", "I cannot kick other moderators or administrators."))
+            return
+
+        if not reason:
+            await ctx.send(embed=error_embed("Missing Argument", "Missing required argument: `reason`"))
             return
 
         case = get_next_case()
@@ -571,13 +591,8 @@ class Moderation(commands.Cog):
     @commands.hybrid_command(name="ban", description="Bans a user from the server.")
     @is_role_authorized()
     @app_commands.describe(user="The user to ban", reason="The reason for banning the user")
-    async def ban(self, ctx, user, *, reason: str):
-        reason, ignore_restrictions = await self._resolve_restriction_bypass(ctx, reason)
-        if reason is None:
-            return
-        if not reason:
-            await ctx.send(embed=error_embed("Missing Reason", "Please provide a reason for the ban."))
-            return
+    async def ban(self, ctx, user, *, reason: str | None = None):
+        ignore_restrictions = self._bypasses_restrictions(ctx)
 
         user_id = None
 
@@ -602,6 +617,10 @@ class Moderation(commands.Cog):
                     return
             except discord.NotFound:
                 member_to_ban = None
+
+        if not reason:
+            await ctx.send(embed=error_embed("Missing Argument", "Missing required argument: `reason`"))
+            return
 
         case = get_next_case()
         ban_message = f"**Case #{case}** — You have been banned from California State Roleplay for: {reason}."
@@ -657,13 +676,8 @@ class Moderation(commands.Cog):
     @commands.hybrid_command(name="softban", description="Softbans a user (bans and immediately unbans to delete messages).")
     @is_role_authorized()
     @app_commands.describe(user="The user to softban", reason="The reason for softbanning the user")
-    async def softban(self, ctx, user, *, reason: str):
-        reason, ignore_restrictions = await self._resolve_restriction_bypass(ctx, reason)
-        if reason is None:
-            return
-        if not reason:
-            await ctx.send(embed=error_embed("Missing Reason", "Please provide a reason for the softban."))
-            return
+    async def softban(self, ctx, user, *, reason: str | None = None):
+        ignore_restrictions = self._bypasses_restrictions(ctx)
 
         user_id = None
 
@@ -688,6 +702,10 @@ class Moderation(commands.Cog):
                     return
             except discord.NotFound:
                 member_to_ban = None
+
+        if not reason:
+            await ctx.send(embed=error_embed("Missing Argument", "Missing required argument: `reason`"))
+            return
 
         case = get_next_case()
         softban_message = f"**Case #{case}** — You have been softbanned from California State Roleplay for: {reason}."
@@ -793,16 +811,17 @@ class Moderation(commands.Cog):
     @commands.hybrid_command(name="mute", description="Mutes a user.")
     @is_moderation()
     @app_commands.describe(user="The user to mute", time="Duration (e.g. 10m, 2h, 1d, 1w)", reason="The reason for mute")
-    async def mute(self, ctx, user: discord.Member, time: str, *, reason: str):
-        reason, ignore_restrictions = await self._resolve_restriction_bypass(ctx, reason)
-        if reason is None:
-            return
-        if not reason:
-            await ctx.send(embed=error_embed("Missing Reason", "Please provide a reason for the mute."))
+    async def mute(self, ctx, user: discord.Member, time: str | None = None, *, reason: str | None = None):
+        if not self._bypasses_restrictions(ctx) and self._is_protected_moderator(user):
+            await ctx.send(embed=error_embed("Cannot Mute User", "I cannot mute other moderators or administrators."))
             return
 
-        if not ignore_restrictions and self._is_protected_moderator(user):
-            await ctx.send(embed=error_embed("Cannot Mute User", "I cannot mute other moderators or administrators."))
+        if not time:
+            await ctx.send(embed=error_embed("Missing Argument", "Missing required argument: `time`"))
+            return
+
+        if not reason:
+            await ctx.send(embed=error_embed("Missing Argument", "Missing required argument: `reason`"))
             return
 
         mute_duration = parse_time(time)
@@ -880,16 +899,13 @@ class Moderation(commands.Cog):
     @commands.hybrid_command(name="warn", description="Warns a user.")
     @is_moderation()
     @app_commands.describe(user="The user to warn", reason="The reason for the warning")
-    async def warn(self, ctx, user: discord.Member, *, reason: str):
-        reason, ignore_restrictions = await self._resolve_restriction_bypass(ctx, reason)
-        if reason is None:
-            return
-        if not reason:
-            await ctx.send(embed=error_embed("Missing Reason", "Please provide a reason for the warning."))
+    async def warn(self, ctx, user: discord.Member, *, reason: str | None = None):
+        if not self._bypasses_restrictions(ctx) and self._is_protected_moderator(user):
+            await ctx.send(embed=error_embed("Cannot Warn User", "I cannot warn other moderators or administrators."))
             return
 
-        if not ignore_restrictions and self._is_protected_moderator(user):
-            await ctx.send(embed=error_embed("Cannot Warn User", "I cannot warn other moderators or administrators."))
+        if not reason:
+            await ctx.send(embed=error_embed("Missing Argument", "Missing required argument: `reason`"))
             return
 
         case = get_next_case()
@@ -984,6 +1000,7 @@ class Moderation(commands.Cog):
                     f"> **Reason:** {reason}\n"
                     f"> **Reference ID:** `{ref_id}`"
                 ),
+                # "Click the button below to appeal this infraction.",
             ),
             color=BLANK_COLOR,
         )
@@ -991,8 +1008,132 @@ class Moderation(commands.Cog):
         dm_embed.set_thumbnail(url=CSRP_ICON)
         brand_footer(dm_embed)
 
+        # bot_ref = self.bot
+        # infractions_ref = self.infractions
+        # infracted_by = ctx.author
+
+        # class AppealModal(discord.ui.Modal):
+            # def __init__(self_modal):
+                # super().__init__(title="Appeal Infraction", timeout=None)
+                # self_modal.punishment_input = discord.ui.TextInput(label="Punishment", placeholder="Enter the punishment", required=True)
+                # self_modal.reason_input = discord.ui.TextInput(label="Why should we accept your appeal?", style=discord.TextStyle.paragraph, required=True)
+                # self_modal.proof_input = discord.ui.TextInput(label="Related proof (optional)", placeholder="Paste a link here", required=False)
+                # self_modal.add_item(self_modal.punishment_input)
+                # self_modal.add_item(self_modal.reason_input)
+                # self_modal.add_item(self_modal.proof_input)
+
+            # async def on_submit(self_modal, modal_interaction):
+                # appeals_channel = bot_ref.get_channel(APPEALS_CHANNEL_ID)
+                # if appeals_channel is None:
+                    # await modal_interaction.response.send_message(embed=error_embed("Channel Not Found", "The appeals channel could not be found."), ephemeral=True)
+                    # return
+
+                # infraction = infractions_ref.get(ref_id)
+                # if infraction:
+                    # infraction["appeal"] = {
+                        # "reason": self_modal.reason_input.value,
+                        # "proof": self_modal.proof_input.value or "No proof provided",
+                    # }
+
+                # appeal_embed = discord.Embed(
+                    # title="New Appeal Submission",
+                    # description=embed_description(
+                        # (
+                            # f"> **Appellant:** {target.mention}\n"
+                            # f"> **Reference ID:** `{ref_id}`\n"
+                            # f"> **Punishment:** {self_modal.punishment_input.value}"
+                        # ),
+                        # (
+                            # f"> **Reason:** {self_modal.reason_input.value}\n"
+                            # f"> **Proof:** {self_modal.proof_input.value or 'No proof provided'}"
+                        # ),
+                    # ),
+                    # color=BLANK_COLOR,
+                # )
+                # appeal_embed.set_author(name="California State Roleplay", icon_url=CSRP_ICON)
+                # appeal_embed.set_thumbnail(url=target.display_avatar.url)
+                # brand_footer(appeal_embed)
+
+                # accept_btn = discord.ui.Button(label="Accept", style=discord.ButtonStyle.green)
+                # deny_btn = discord.ui.Button(label="Deny", style=discord.ButtonStyle.danger)
+
+                # async def accept_callback(button_interaction):
+                    # if infraction:
+                        # infraction["status"] = "Accepted"
+                        # infraction["reviewer"] = button_interaction.user
+                    # accepted_embed = discord.Embed(
+                        # title="Appeal Accepted",
+                        # description=embed_description(
+                            # f"Congratulations, {target.mention}! Your infraction appeal has been accepted.",
+                            # (
+                                # f"> **Reference ID:** `{ref_id}`\n"
+                                # f"> **Reviewed By:** {button_interaction.user.mention}"
+                            # ),
+                        # ),
+                        # color=BLANK_COLOR,
+                    # )
+                    # accepted_embed.set_author(name="California State Roleplay", icon_url=CSRP_ICON)
+                    # brand_footer(accepted_embed)
+                    # try:
+                        # await target.send(embed=accepted_embed)
+                    # except discord.Forbidden:
+                        # pass
+                    # appeal_embed.title = "Accepted Appeal"
+                    # appeal_embed.color = BLANK_COLOR
+                    # appeal_embed.description = embed_description(
+                        # appeal_embed.description or "",
+                        # f"> **Reviewed By:** {button_interaction.user.mention}",
+                    # )
+                    # await button_interaction.response.edit_message(embed=appeal_embed, view=None)
+
+                # async def deny_callback(button_interaction):
+                    # if infraction:
+                        # infraction["status"] = "Denied"
+                        # infraction["reviewer"] = button_interaction.user
+                    # denied_embed = discord.Embed(
+                        # title="Appeal Denied",
+                        # description=f"Your infraction appeal has been denied. Please open a ticket with ref id `{ref_id}`.",
+                        # color=BLANK_COLOR,
+                    # )
+                    # denied_embed.set_author(name="California State Roleplay", icon_url=CSRP_ICON)
+                    # brand_footer(denied_embed)
+                    # try:
+                        # await target.send(embed=denied_embed)
+                    # except discord.Forbidden:
+                        # pass
+                    # appeal_embed.title = "Denied Appeal"
+                    # appeal_embed.color = BLANK_COLOR
+                    # appeal_embed.description = embed_description(
+                        # appeal_embed.description or "",
+                        # f"> **Reviewed By:** {button_interaction.user.mention}",
+                    # )
+                    # await button_interaction.response.edit_message(embed=appeal_embed, view=None)
+
+                # accept_btn.callback = accept_callback
+                # deny_btn.callback = deny_callback
+
+                # review_view = discord.ui.View(timeout=None)
+                # review_view.add_item(accept_btn)
+                # review_view.add_item(deny_btn)
+
+                # await appeals_channel.send(f"{infracted_by.mention}", embed=appeal_embed, view=review_view)
+                # await modal_interaction.response.send_message(
+                    # embed=success_embed("Appeal Submitted", f"Your appeal has been submitted. Reference ID: `{ref_id}`"),
+                    # ephemeral=True,
+                # )
+
+        # appeal_button = discord.ui.Button(label="Appeal Infraction", style=discord.ButtonStyle.primary)
+
+        # async def appeal_button_callback(interaction):
+            # await interaction.response.send_modal(AppealModal())
+
+        # appeal_button.callback = appeal_button_callback
+        # appeal_view = discord.ui.View(timeout=None)
+        # appeal_view.add_item(appeal_button)
+
         if isinstance(target, discord.Member):
             try:
+                # await target.send(embed=dm_embed, view=appeal_view)
                 await target.send(embed=dm_embed)
                 await ctx.send(embed=success_embed("User Infracted", "The user has been successfully infracted."), delete_after=5)
             except discord.Forbidden:
