@@ -603,7 +603,10 @@ class Events(commands.Cog):
         )
         if not pinged_staff:
             return
-
+        for member in message.mentions:
+            has_ssu_role = any(role.id in SSU_STAFF_ROLE_ID for role in member.roles) 
+        if not has_ssu_role and not “host ssu”in message.content.lower():
+            pass
         embed = discord.Embed(
             title="⚠️ Asking for an SSU",
             description=(
