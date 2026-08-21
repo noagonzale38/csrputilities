@@ -604,7 +604,7 @@ class Events(commands.Cog):
         if not pinged_staff:
             return
         for member in message.mentions:
-            has_ssu_role = any(role.id in SSU_STAFF_ROLE_ID for role in member.roles) 
+            has_ssu_role = any(role.id in self.SSU_STAFF_ROLE_ID for role in member.roles) 
         if not has_ssu_role:
             pass
         embed = discord.Embed(
