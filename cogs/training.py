@@ -121,6 +121,10 @@ def _trainee_removal_embed() -> discord.Embed:
     return embed
 
 
+TIMEREQUEST_USER_RE = re.compile(r"\*\*User:\*\*\s*<@!?(\d+)>")
+TIMEREQUEST_SPENT_RE = re.compile(r"\*\*Time Spent:\*\*\s*`([^`]+)`")
+
+
 def _parse_duration_minutes(text: str):
     """Parse free-form durations ('1h 30m', '45 minutes', '1:30', '90') into minutes."""
     text = text.strip().lower()
@@ -155,6 +159,154 @@ def _format_minutes(total_minutes) -> str:
     return " ".join(parts)
 
 
+def _timerequest_details(message: discord.Message):
+    """Pull the requester and the time they logged back out of a posted request embed."""
+    if not message.embeds or not message.embeds[0].description:
+        return None, None
+    description = message.embeds[0].description
+    user_match = TIMEREQUEST_USER_RE.search(description)
+    spent_match = TIMEREQUEST_SPENT_RE.search(description)
+    requester_id = int(user_match.group(1)) if user_match else None
+    minutes = _parse_duration_minutes(spent_match.group(1)) if spent_match else None
+    return requester_id, minutes
+
+
+async def _dm_requester(interaction: discord.Interaction, requester_id: int, embed: discord.Embed) -> bool:
+    user = interaction.client.get_user(requester_id)
+    if user is None:
+        try:
+            user = await interaction.client.fetch_user(requester_id)
+        except discord.HTTPException:
+            return False
+    try:
+        await user.send(embed=embed)
+        return True
+    except discord.HTTPException:
+        return False
+
+
+async def _close_timerequest(message: discord.Message, status: str, reviewer: discord.Member, reason: str = None):
+    """Stamp the request embed with its outcome and retire the buttons."""
+    embed = message.embeds[0] if message.embeds else discord.Embed(color=BLANK_COLOR)
+    embed.add_field(
+        name="Review",
+        value=embed_description(
+            f"> **Status:** {status}\n> **Reviewed By:** {reviewer.mention}",
+            f"> **Reason:** {reason}" if reason else "",
+        ),
+        inline=False,
+    )
+    view = TimeRequestReviewView()
+    for child in view.children:
+        if isinstance(child, discord.ui.Button):
+            child.disabled = True
+    view.stop()
+    try:
+        await message.edit(embed=embed, view=view)
+    except discord.HTTPException:
+        pass
+
+
+class TimeRequestDeclineModal(discord.ui.Modal, title="Decline Time Request"):
+    reason = discord.ui.TextInput(
+        label="Reason",
+        style=discord.TextStyle.paragraph,
+        placeholder="Why is this time request being declined?",
+        required=True,
+        max_length=1000,
+    )
+
+    def __init__(self, message: discord.Message, requester_id: int):
+        super().__init__()
+        self.message = message
+        self.requester_id = requester_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        reason = str(self.reason)
+        dm_embed = discord.Embed(
+            title="Time Request Declined",
+            description=embed_description(
+                (
+                    f"> **Status:** Declined\n"
+                    f"> **Reviewed By:** {interaction.user.mention}"
+                ),
+                f"> **Reason:** {reason}",
+                f"> **Request:** {self.message.jump_url}",
+            ),
+            color=BLANK_COLOR,
+        )
+        brand_footer(dm_embed)
+
+        delivered = await _dm_requester(interaction, self.requester_id, dm_embed)
+        await _close_timerequest(self.message, "Declined", interaction.user, reason)
+        note = "" if delivered else "\n\n> **Note:** I could not DM them; their DMs are closed."
+        await interaction.response.send_message(
+            embed=info_embed("Request Declined", f"The request has been declined and <@{self.requester_id}> was notified.{note}"),
+            ephemeral=True,
+        )
+
+
+class TimeRequestReviewView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @staticmethod
+    def _is_reviewer(interaction: discord.Interaction) -> bool:
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            return False
+        return ROLE_TIMEREQUEST_REVIEW in {r.id for r in interaction.user.roles}
+
+    async def _resolve(self, interaction: discord.Interaction):
+        """Returns the requester id, or None after replying if the click can't be handled."""
+        if not self._is_reviewer(interaction):
+            await generalised_interaction_check_failure(interaction)
+            return None, None
+        requester_id, minutes = _timerequest_details(interaction.message)
+        if requester_id is None:
+            await interaction.response.send_message(
+                embed=error_embed("Request Unreadable", "I could not read the requester from this request."),
+                ephemeral=True,
+            )
+            return None, None
+        return requester_id, minutes
+
+    @discord.ui.button(label="Time Added", style=discord.ButtonStyle.green, custom_id="timerequest_added")
+    async def time_added(self, interaction: discord.Interaction, button: discord.ui.Button):
+        requester_id, minutes = await self._resolve(interaction)
+        if requester_id is None:
+            return
+
+        added_line = f"> **Time Added:** `{_format_minutes(minutes)}`\n" if minutes is not None else ""
+        dm_embed = discord.Embed(
+            title="Time Request Approved",
+            description=embed_description(
+                (
+                    f"> **Status:** Time Added\n"
+                    f"{added_line}"
+                    f"> **Reviewed By:** {interaction.user.mention}"
+                ),
+                f"> **Request:** {interaction.message.jump_url}",
+            ),
+            color=BLANK_COLOR,
+        )
+        brand_footer(dm_embed)
+
+        delivered = await _dm_requester(interaction, requester_id, dm_embed)
+        await _close_timerequest(interaction.message, "Time Added", interaction.user)
+        note = "" if delivered else "\n\n> **Note:** I could not DM them; their DMs are closed."
+        await interaction.response.send_message(
+            embed=success_embed("Time Added", f"<@{requester_id}> has been notified that their time was added.{note}"),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="Decline", style=discord.ButtonStyle.danger, custom_id="timerequest_declined")
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
+        requester_id, _ = await self._resolve(interaction)
+        if requester_id is None:
+            return
+        await interaction.response.send_modal(TimeRequestDeclineModal(interaction.message, requester_id))
+
+
 class Training(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -162,6 +314,7 @@ class Training(commands.Cog):
         # trainees: {user_id_str: {"started": ts, "reminder_sent": bool, "guild_id": int}}
 
     async def cog_load(self):
+        self.bot.add_view(TimeRequestReviewView())  # keeps review buttons alive across restarts
         self.trainee_deadline_loop.start()
 
     async def cog_unload(self):
@@ -523,6 +676,7 @@ class Training(commands.Cog):
             request_message = await channel.send(
                 f"<@&{ROLE_TIMEREQUEST_REVIEW}>",
                 embed=embed,
+                view=TimeRequestReviewView(),
                 allowed_mentions=discord.AllowedMentions(everyone=False, users=False, roles=True),
             )
         except discord.Forbidden:
