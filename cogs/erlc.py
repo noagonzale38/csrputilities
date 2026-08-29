@@ -8,10 +8,10 @@ from discord import app_commands
 
 from config import (
     HEADERS, KEY_HEADERS, ADMIN_PRIVILEGE_ROLE_IDS, blacklisted_command,
-    is_role_authorized,
+    is_role_authorized, is_ssd_authorized,
 )
 from cogs.helpers import (
-    Colors, BLANK_COLOR, CHECK, CROSS, CSRP_ICON,
+    Colors, BLANK_COLOR, CHECK, CROSS, CSRP_ICON, LOADING,
     success_embed, error_embed, info_embed, brand_footer, embed_description,
     api_get, api_post, PaginatorView, user_tag,
 )
@@ -23,6 +23,8 @@ PRC_HEADERS = HEADERS
 PRC_SERVER_OFFLINE_STATUSES = {288, 422, 3002}
 
 WANTED_STARS = "★"
+
+SSD_MESSAGE = "⚠️We have decided to conclude our session. Please leave the server. Join for more info, code CALF."
 
 
 def _prc_status_message(status: int, *, action: str = "complete this action") -> tuple[str, str]:
@@ -191,6 +193,57 @@ class ERLC(commands.Cog):
 
         except Exception as e:
             await ctx.send(embed=error_embed("Connection Error", f"Error connecting to the server: `{e}`"))
+
+    @commands.hybrid_command(name="ssd", description="Announce the session shutdown in-game and shut the server down.")
+    @is_ssd_authorized()
+    async def ssd(self, ctx: commands.Context):
+        await ctx.defer()
+
+        embed = discord.Embed(
+            title=f"{LOADING}Executing Command",
+            description="> **Execution Status:** Sending message",
+            color=BLANK_COLOR,
+        )
+        embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else "")
+        brand_footer(embed)
+        message = await ctx.send(embed=embed)
+
+        async def set_status(status: str):
+            embed.description = f"> **Execution Status:** {status}"
+            await message.edit(embed=embed)
+
+        try:
+            status, _ = await self._send_command(f":m {SSD_MESSAGE}")
+            if status != 200:
+                title, description = _prc_status_message(status, action="send the shutdown message")
+                await message.edit(embed=error_embed(title, description))
+                return
+
+            await set_status("Waiting 5 seconds")
+            await asyncio.sleep(5)
+
+            await set_status("Sending shutdown command")
+            status, _ = await self._send_command(":shutdown")
+            if status != 200:
+                title, description = _prc_status_message(status, action="send the shutdown command")
+                await message.edit(embed=error_embed(title, description))
+                return
+
+            done = discord.Embed(
+                title="Session Shutdown",
+                description=(
+                    "> **Execution Status:** Completed\n"
+                    f"> **Executed By:** {user_tag(ctx.author)}\n"
+                    "> **Commands Sent:** `:m` and `:shutdown`"
+                ),
+                color=BLANK_COLOR,
+            )
+            done.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else "")
+            brand_footer(done)
+            await message.edit(embed=done)
+
+        except Exception as e:
+            await message.edit(embed=error_embed("Connection Error", f"Error connecting to the server: `{e}`"))
 
     @erlc_group.command(name="players", description="Get current players in server.")
     async def erlc_players(self, ctx):

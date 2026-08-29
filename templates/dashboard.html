@@ -452,9 +452,6 @@
           <label>Staff feedback channel ID</label>
           <input name="staff_feedback_channel" value="{{ settings.staff_feedback_channel or '' }}">
           <label class="checkbox-line"><input type="checkbox" name="discord_checks_enabled" {% if settings.discord_checks_enabled != false %}checked{% endif %}> Discord checks enabled</label>
-          <label class="checkbox-line"><input type="checkbox" name="feedback_enabled" {% if settings.feedback_enabled %}checked{% endif %}> Feedback enabled</label>
-          <label>Feedback questions</label>
-          <textarea name="feedback_questions">{{ settings.feedback_questions|join('\n') }}</textarea>
           <h3>Rank Role Mapping</h3>
           {% for rank in rank_order %}
           <label>{{ rank }}</label>

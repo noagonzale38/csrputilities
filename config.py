@@ -70,6 +70,8 @@ PERMITTED_SESSION_ROLE_IDS = [
 
 NOAH_DIR = [1408307735329767585, 985228543191548004]
 
+SSD_ROLE_IDS = [1441172991563141130]
+
 SALES_ROLE_IDS = [
     1137117556348567614, 1137129271769436340, 1157648329619021844,
     1131166127964291172, 985228543191548004
@@ -234,6 +236,9 @@ def is_bot_staff():
 
 def is_authorized():
     return _configured_user_check("authorized")
+
+def is_ssd_authorized():
+    return _role_check(SSD_ROLE_IDS)
 
 def is_authorized_user_or_role(ctx):
     if ctx.author.id in set(get_permission_user_ids(ctx.guild.id, "support")):

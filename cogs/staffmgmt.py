@@ -18,6 +18,7 @@ from cogs.moderation import build_infraction_embed
 from cogs.settings import (
     get_guild_settings, update_guild_setting, has_setting_permission, RANK_ORDER, member_has_rank_or_higher,
     get_permission_role_ids, get_permission_user_ids,
+    BASE_ROLE_BY_RANK, EXTRA_ROLE_IDS_BY_RANK, highest_rank_from_role_ids,
 )
 
 RETIREMENTS_FILE = "retirements.json"
@@ -26,26 +27,6 @@ ROLE_GROUP_PROGRESS_EVERY = 10
 ROLE_GROUP_FAILURE_PREVIEW = 10
 USER_ID_TOKEN_RE = re.compile(r"<@!?(\d{15,20})>|(\d{15,20})")
 STAFF_FEEDBACK_STATS_FILE = Path(__file__).resolve().parent.parent / "staff_feedback_stats.json"
-BASE_ROLE_BY_RANK = {
-    "Senior Management": 1131166127964291172,
-    "Management": 1131166127964291172,
-    "Internal Affairs Supervisor": 1137119576514105404,
-    "Internal Affairs": 1137119576514105404,
-    "Senior Admin": 968848542347173908,
-    "Trial Internal Affairs": 1137119576514105404,
-    "Admin": 968848542347173908,
-    "Junior Admin": 968848542347173908,
-    "Senior Moderator": 968851098221813770,
-    "Moderator": 968851098221813770,
-}
-EXTRA_ROLE_IDS_BY_RANK = {
-    "Senior Management": [1157648329619021844],
-    "Management": [1157648329619021844],
-    "Internal Affairs Supervisor": [1137117556348567614],
-    "Internal Affairs": [1137117556348567614],
-    "Trial Internal Affairs": [1137117556348567614],
-}
-
 MANAGE_MINIMUM_RANK = {}
 
 DEMOTION_MAP = {}
@@ -456,11 +437,18 @@ def _get_target_role_ids(
     target_role_ids: list[int] = []
     warnings: list[str] = []
 
+    # Never restore a role tied to a rank above the one they are coming back as - that
+    # includes the old rank role itself as well as tier base/extra roles they outgrew.
+    demoted_role_ids = _rank_related_role_ids(settings, demoted_rank)
+    superior_role_ids: set[int] = set()
+    for rank in RANK_ORDER[:RANK_ORDER.index(demoted_rank)]:
+        superior_role_ids |= _rank_related_role_ids(settings, rank)
+    superior_role_ids -= demoted_role_ids
+
     previous_roles = retirement.get("previous_roles", [])
-    previous_highest_role_id = rank_roles.get(highest_rank)
     target_role_ids.extend(
         role_id for role_id in previous_roles
-        if role_id and role_id != previous_highest_role_id
+        if role_id and int(role_id) not in superior_role_ids
     )
 
     demoted_role_id = rank_roles.get(demoted_rank)
@@ -488,28 +476,18 @@ def _get_target_role_ids(
 
 
 def _get_member_highest_rank(member: discord.Member, settings: dict) -> Optional[str]:
-    rank_roles = settings.get("rank_roles", {})
-    role_to_rank = {role_id: rank for rank, role_id in rank_roles.items() if role_id is not None}
+    return highest_rank_from_role_ids({role.id for role in member.roles}, settings)
 
-    for rank in reversed(RANK_ORDER):
-        if rank_roles.get(rank) is not None:
-            continue
-        base_role_id = BASE_ROLE_BY_RANK.get(rank)
-        if base_role_id and base_role_id not in role_to_rank:
-            role_to_rank[base_role_id] = rank
 
-    highest_rank = None
-    highest_rank_index = len(RANK_ORDER)
-    for role in member.roles:
-        rank = role_to_rank.get(role.id)
-        if rank is None:
-            continue
-        idx = RANK_ORDER.index(rank)
-        if idx < highest_rank_index:
-            highest_rank = rank
-            highest_rank_index = idx
+def resolve_retirement_rank(settings: dict, retirement: dict) -> Optional[str]:
+    """The rank a retirement record represents, re-derived from the saved roles.
 
-    return highest_rank
+    Records written before tier base roles were understood stored the base role's rank
+    (e.g. `Admin` for someone who only ever held the Junior Administrator role), so the
+    saved roles are the source of truth and the stored rank is only a fallback.
+    """
+    derived_rank = highest_rank_from_role_ids(retirement.get("previous_roles", []), settings)
+    return derived_rank or retirement.get("highest_rank")
 
 
 def _can_manage_rank(actor_rank: Optional[str], target_rank: Optional[str]) -> bool:
@@ -966,7 +944,7 @@ class StaffManagement(commands.Cog):
             await ctx.send(embed=error_embed("No Record", f"{user_tag(user)} does not have a retirement record."))
             return
 
-        highest_rank = retirement.get("highest_rank")
+        highest_rank = resolve_retirement_rank(settings, retirement)
         rank_roles = settings.get("rank_roles", {})
         actor_rank = _get_member_highest_rank(ctx.author, settings)
 

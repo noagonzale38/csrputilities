@@ -126,8 +126,6 @@ DEFAULT_SETTINGS = {
     "hostage_sticky_message_id": None,
     "partnership_sticky_message_id": None,
     "discord_checks_enabled": True,
-    "feedback_enabled": False,
-    "feedback_questions": ["Why did you decide to leave?"],
     "staff_feedback_channel": None,
     "staff_feedback_sticky_message_id": None,
     "partnership_log_channel": None,
@@ -151,6 +149,36 @@ DEFAULT_SETTINGS = {
 }
 
 RANK_ORDER = list(DEFAULT_SETTINGS["rank_roles"].keys())
+
+# Tier base roles are handed to every rank inside a tier (e.g. every administrator holds
+# `Administrator`), so they only prove tier membership - never a specific rank.
+BASE_ROLE_BY_RANK = {
+    "Senior Management": 1131166127964291172,
+    "Management": 1131166127964291172,
+    "Internal Affairs Supervisor": 1137117556348567614,
+    "Internal Affairs": 1137117556348567614,
+    "Trial Internal Affairs": 1137117556348567614,
+    "Senior Admin": 987528595465453568,
+    "Admin": 987528595465453568,
+    "Junior Admin": 987528595465453568,
+    "Senior Moderator": 981595679505940490,
+    "Moderator": 981595679505940490,
+}
+
+EXTRA_ROLE_IDS_BY_RANK = {
+    "Senior Management": [1157648329619021844],
+    "Management": [1157648329619021844],
+}
+
+# The moderation and administration base roles are handed out on joining the tier, so on
+# their own they resolve to the entry rank of that tier; every rank above it is only
+# granted by that rank's own role.
+FALLBACK_RANK_BY_BASE_ROLE = {
+    987528595465453568: "Junior Admin",
+    981595679505940490: "Moderator",
+}
+
+BASE_ROLE_IDS = set(BASE_ROLE_BY_RANK.values())
 
 
 def _merge_defaults(target: dict, defaults: dict) -> bool:
@@ -267,18 +295,32 @@ def member_has_permission(member: discord.Member, *, role_keys: list[str] | None
     return False
 
 
-def get_member_highest_rank(member: discord.Member) -> str | None:
-    settings = get_guild_settings(member.guild.id)
+def highest_rank_from_role_ids(role_ids, settings: dict) -> str | None:
+    """Resolve the highest rank a set of role IDs represents, ignoring tier base roles."""
     role_to_rank = {
         int(role_id): rank
         for rank, role_id in settings.get("rank_roles", {}).items()
-        if role_id is not None
+        if role_id is not None and rank in RANK_ORDER and int(role_id) not in BASE_ROLE_IDS
     }
+
+    held_role_ids = {int(role_id) for role_id in role_ids if role_id}
 
     highest_rank = None
     highest_rank_index = len(RANK_ORDER)
-    for role in member.roles:
-        rank = role_to_rank.get(role.id)
+    for role_id in held_role_ids:
+        rank = role_to_rank.get(role_id)
+        if rank is None:
+            continue
+        idx = RANK_ORDER.index(rank)
+        if idx < highest_rank_index:
+            highest_rank = rank
+            highest_rank_index = idx
+
+    if highest_rank is not None:
+        return highest_rank
+
+    for role_id in held_role_ids:
+        rank = FALLBACK_RANK_BY_BASE_ROLE.get(role_id)
         if rank is None:
             continue
         idx = RANK_ORDER.index(rank)
@@ -287,6 +329,11 @@ def get_member_highest_rank(member: discord.Member) -> str | None:
             highest_rank_index = idx
 
     return highest_rank
+
+
+def get_member_highest_rank(member: discord.Member) -> str | None:
+    settings = get_guild_settings(member.guild.id)
+    return highest_rank_from_role_ids({role.id for role in member.roles}, settings)
 
 
 def member_has_rank_or_higher(member: discord.Member, minimum_rank: str) -> bool:
@@ -309,10 +356,7 @@ def dashboard_embed(guild: discord.Guild) -> discord.Embed:
     fb_ch = f"<#{settings['staff_feedback_channel']}>" if settings.get("staff_feedback_channel") else "`Not set`"
     partner_log_ch = f"<#{settings['partnership_log_channel']}>" if settings.get("partnership_log_channel") else "`Not set`"
     discord_checks_on = f"{CHECK} Enabled" if settings.get("discord_checks_enabled", True) else f"{CROSS} Disabled"
-    fb_on = f"{CHECK} Enabled" if settings.get("feedback_enabled") else f"{CROSS} Disabled"
-    questions = settings.get("feedback_questions", [])
-    q_text = "\n".join(f"> `{i + 1}.` {q}" for i, q in enumerate(questions)) or "> None"
-    partner = _display_role_list(guild, settings.get("partnership_allowed_roles", []))
+    partner =_display_role_list(guild, settings.get("partnership_allowed_roles", []))
     embed_roles = _display_role_list(guild, settings.get("embed_allowed_roles", []))
     retire = _display_role_list(guild, settings.get("retire_allowed_roles", []))
 
@@ -329,9 +373,7 @@ def dashboard_embed(guild: discord.Guild) -> discord.Embed:
         f"**Hostage Review Channel:** {hostage_review_ch}\n"
         f"**Staff Feedback Channel:** {fb_ch}\n"
         f"**Partnership Log Channel:** {partner_log_ch}\n\n"
-        f"**Discord Checks:** {discord_checks_on}\n"
-        f"**Leave Feedback:** {fb_on}\n"
-        f"**Questions:**\n{q_text}\n\n"
+        f"**Discord Checks:** {discord_checks_on}\n\n"
         f"**Partnership Permissions:** {partner}\n"
         f"**Embed Creation Permissions:** {embed_roles}\n"
         f"**Retire/Reinstate/Demote Permissions:** {retire}\n\n"
@@ -390,8 +432,6 @@ class DashboardView(discord.ui.View):
             discord.SelectOption(label="Staff Feedback Channel", value="staff_feedback_channel", description="Where staff feedback is posted"),
             discord.SelectOption(label="Partnership Log Channel", value="partnership_log_channel", description="Where partnership activity is logged"),
             discord.SelectOption(label="Discord Checks Toggle", value="discord_checks_enabled", description="Toggle the automated Discord check loop"),
-            discord.SelectOption(label="Leave Feedback Toggle", value="feedback_enabled", description="Toggle leave feedback DMs"),
-            discord.SelectOption(label="Leave Feedback Questions", value="feedback_questions", description="Edit the leave feedback questions"),
             discord.SelectOption(label="Partnership Permissions", value="partnership_allowed_roles", description="Who can use /partnership"),
             discord.SelectOption(label="Embed Creation Permissions", value="embed_allowed_roles", description="Who can use /embed create"),
             discord.SelectOption(label="Retire/Reinstate/Demote Permissions", value="retire_allowed_roles", description="Who can use /retire, /reinstate, and /demote"),
@@ -432,34 +472,14 @@ class DashboardView(discord.ui.View):
             brand_footer(embed)
             await interaction.response.edit_message(embed=embed, view=view)
 
-        elif choice in ("feedback_enabled", "discord_checks_enabled"):
+        elif choice == "discord_checks_enabled":
             settings = get_guild_settings(self.guild.id)
-            toggle_key = choice
-            current = settings.get(toggle_key, False if toggle_key == "feedback_enabled" else True)
-            view = ToggleView(self.guild, self.author, toggle_key)
+            current = settings.get(choice, True)
+            view = ToggleView(self.guild, self.author, choice)
             status = f"{CHECK} Enabled" if current else f"{CROSS} Disabled"
-            title = "Configure: Leave Feedback" if toggle_key == "feedback_enabled" else "Configure: Discord Checks"
-            description = (
-                f"Currently: **{status}**\n\nWhen enabled, users who leave the server will be DMed feedback questions."
-                if toggle_key == "feedback_enabled"
-                else f"Currently: **{status}**\n\nWhen enabled, the automated Discord check loop will continue running for this server."
-            )
             embed = discord.Embed(
-                title=title,
-                description=description,
-                color=BLANK_COLOR,
-            )
-            brand_footer(embed)
-            await interaction.response.edit_message(embed=embed, view=view)
-
-        elif choice == "feedback_questions":
-            settings = get_guild_settings(self.guild.id)
-            questions = settings.get("feedback_questions", [])
-            q_text = "\n".join(f"`{i + 1}.` {q}" for i, q in enumerate(questions)) or "None"
-            view = QuestionsView(self.guild, self.author)
-            embed = discord.Embed(
-                title="Configure: Leave Feedback Questions",
-                description=f"Current questions:\n{q_text}\n\nClick **Edit** to modify (one question per line).",
+                title="Configure: Discord Checks",
+                description=f"Currently: **{status}**\n\nWhen enabled, the automated Discord check loop will continue running for this server.",
                 color=BLANK_COLOR,
             )
             brand_footer(embed)
@@ -770,56 +790,6 @@ class ToggleView(discord.ui.View):
         update_guild_setting(self.guild.id, self.setting_key, False)
         view = DashboardView(self.guild, self.author)
         await edit_settings_dashboard(interaction.response, self.guild, view)
-
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
-    async def back_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        view = DashboardView(self.guild, self.author)
-        await edit_settings_dashboard(interaction.response, self.guild, view)
-
-
-class QuestionsModal(discord.ui.Modal, title="Edit Feedback Questions"):
-    questions_input = discord.ui.TextInput(
-        label="Questions (one per line)",
-        style=discord.TextStyle.paragraph,
-        placeholder="Why did you decide to leave?\nWhat could we improve?\nWould you consider returning?",
-        required=True,
-        max_length=1000,
-    )
-
-    def __init__(self, guild, author, current_questions, original_message):
-        super().__init__()
-        self.guild = guild
-        self.author = author
-        self.original_message = original_message
-        if current_questions:
-            self.questions_input.default = "\n".join(current_questions)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        questions = [q.strip() for q in self.questions_input.value.split("\n") if q.strip()]
-        update_guild_setting(self.guild.id, "feedback_questions", questions)
-        await interaction.response.defer()
-        view = DashboardView(self.guild, self.author)
-        await refresh_settings_dashboard(self.original_message, self.guild, view)
-
-
-class QuestionsView(discord.ui.View):
-    def __init__(self, guild, author):
-        super().__init__(timeout=120)
-        self.guild = guild
-        self.author = author
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.author.id:
-            await interaction.response.send_message("You cannot use this.", ephemeral=True)
-            return False
-        return True
-
-    @discord.ui.button(label="Edit Questions", style=discord.ButtonStyle.primary)
-    async def edit_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        settings = get_guild_settings(self.guild.id)
-        questions = settings.get("feedback_questions", [])
-        modal = QuestionsModal(self.guild, self.author, questions, interaction.message)
-        await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
     async def back_btn(self, interaction: discord.Interaction, button: discord.ui.Button):

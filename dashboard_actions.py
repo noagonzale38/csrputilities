@@ -22,7 +22,7 @@ from config import (
     blacklisted_command,
     report_blacklists,
 )
-from cogs.helpers import CSRP_ICON, api_get, api_post, normalize_display_mentions
+from cogs.helpers import CSRP_ICON, api_get, api_post, normalize_display_mentions, fetch_guild_member
 from cogs.moderation import (
     clear_all_modlogs_data,
     clear_user_modlogs,
@@ -31,7 +31,6 @@ from cogs.moderation import (
     save_modlog,
 )
 from cogs.settings import (
-    DEFAULT_SETTINGS,
     PERMISSION_ROLE_LABELS,
     PERMISSION_USER_LABELS,
     RANK_ORDER,
@@ -49,6 +48,7 @@ from cogs.staffmgmt import (
     get_retirement,
     load_retirements,
     remove_retirement,
+    resolve_retirement_rank,
     save_retirement,
 )
 from modlog_store import count_modlogs, get_modlogs_for_user as get_modlogs_for_user_db
@@ -876,7 +876,8 @@ async def resolve_user(bot, user_identifier: Any):
     guild = await get_target_guild(bot)
     user_id = _parse_discord_user_id(user_identifier)
     if user_id is not None:
-        member = guild.get_member(user_id)
+        # Prefer the member object so callers keep access to roles.
+        member = await fetch_guild_member(guild, user_id)
         if member is not None:
             return member
         try:
@@ -1242,7 +1243,7 @@ async def perform_kick(bot, actor_id: int, target_id: int, reason: str) -> str:
 async def perform_ban(bot, actor_id: int, target_id: int, reason: str) -> str:
     actor = await get_actor_member(bot, actor_id)
     guild = await get_target_guild(bot)
-    member = guild.get_member(int(target_id))
+    member = await fetch_guild_member(guild, target_id)
     user = member or await bot.fetch_user(int(target_id))
     case_id = get_next_case()
     try:
@@ -1383,7 +1384,7 @@ async def perform_reinstate(bot, actor_id: int, target_id: int) -> str:
     if not retirement:
         raise RuntimeError("No retirement record exists for that user.")
 
-    highest_rank = retirement.get("highest_rank")
+    highest_rank = resolve_retirement_rank(settings, retirement)
     actor_rank = _get_member_highest_rank(actor, settings)
     if not _can_manage_rank(actor_rank, highest_rank):
         raise RuntimeError("You cannot reinstate a member with a higher saved rank than your own.")
@@ -1564,9 +1565,6 @@ async def update_dashboard_settings(guild_id: int, form_data: dict) -> str:
         update_guild_setting(guild_id, key, int(raw_value) if raw_value else None)
 
     update_guild_setting(guild_id, "discord_checks_enabled", form_data.get("discord_checks_enabled") == "on")
-    update_guild_setting(guild_id, "feedback_enabled", form_data.get("feedback_enabled") == "on")
-    questions = [line.strip() for line in form_data.get("feedback_questions", "").splitlines() if line.strip()]
-    update_guild_setting(guild_id, "feedback_questions", questions or DEFAULT_SETTINGS["feedback_questions"])
 
     for rank in RANK_ORDER:
         raw_value = form_data.get(f"rank::{rank}", "").strip()

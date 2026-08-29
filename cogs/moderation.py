@@ -16,6 +16,7 @@ from cogs.helpers import (
     Colors, BLANK_COLOR, CSRP_ICON, CSRP_BANNER, CHECK, CROSS, PENDING,
     success_embed, error_embed, info_embed, warning_embed, brand_footer, embed_description,
     ConfirmView, PaginatorView, generalised_interaction_check_failure, user_tag,
+    fetch_guild_member, search_guild_members,
 )
 from cogs.settings import get_permission_role_ids
 from modlog_store import (
@@ -226,7 +227,9 @@ class Moderation(commands.Cog):
         match = USER_ID_PATTERN.fullmatch(raw_value)
         if match:
             user_id = int(match.group(1))
-            member = guild.get_member(user_id)
+            # Prefer a member (carries roles, so rank checks downstream stay accurate);
+            # only fall back to a bare user for people who are not in the server.
+            member = await fetch_guild_member(guild, user_id)
             if member is not None:
                 return member
             try:
@@ -242,6 +245,11 @@ class Moderation(commands.Cog):
 
         lowered = raw_value.lower().lstrip("@")
         for member in guild.members:
+            if member.name.lower() == lowered or member.display_name.lower() == lowered:
+                return member
+
+        # Not cached: fall back to a gateway prefix search, which needs no members intent.
+        for member in await search_guild_members(guild, raw_value.lstrip("@")):
             if member.name.lower() == lowered or member.display_name.lower() == lowered:
                 return member
 

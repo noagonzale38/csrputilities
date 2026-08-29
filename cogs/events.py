@@ -26,6 +26,7 @@ from cogs.helpers import (
     Colors, BLANK_COLOR, CSRP_ICON, CHECK, CROSS, PENDING,
     success_embed, error_embed, info_embed, brand_footer, embed_description, user_tag,
     api_get, api_post, generalised_interaction_check_failure,
+    fetch_guild_member, search_guild_members,
 )
 from cogs.settings import get_guild_settings
 from modlog_store import get_next_case
@@ -155,7 +156,7 @@ class PendingBanView(discord.ui.View):
 
     @discord.ui.button(label="Confirm Ban", style=discord.ButtonStyle.danger)
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        member = interaction.guild.get_member(self.user.id)
+        member = await fetch_guild_member(interaction.guild, self.user.id)
         case = get_next_case()
         if member:
             try:
@@ -184,7 +185,7 @@ class ReportActionsView(discord.ui.View):
 
     @discord.ui.button(label="Mute", style=discord.ButtonStyle.danger)
     async def mute_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        member = interaction.guild.get_member(self.user.id)
+        member = await fetch_guild_member(interaction.guild, self.user.id)
         if member:
             await interaction.response.send_modal(DurationModal(member, self))
         else:
@@ -192,8 +193,8 @@ class ReportActionsView(discord.ui.View):
 
     @discord.ui.button(label="Ban", style=discord.ButtonStyle.danger)
     async def ban_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        member = interaction.guild.get_member(self.user.id)
         await interaction.response.defer()
+        member = await fetch_guild_member(interaction.guild, self.user.id)
         if member:
             pending_embed = discord.Embed(
                 title="Confirm Ban",
@@ -225,114 +226,14 @@ class ReportActionsView(discord.ui.View):
         await interaction.response.send_message(embed=success_embed("Report Acknowledged", "The report has been acknowledged."), ephemeral=True)
 
 
-class LeaveFeedbackModal(discord.ui.Modal, title="Leave Feedback"):
-    answer = discord.ui.TextInput(
-        label="Your Response",
-        style=discord.TextStyle.paragraph,
-        placeholder="Type your answer here...",
-        required=True,
-        max_length=1000,
-    )
-
-    def __init__(self, question, question_num, total, guild_name):
-        super().__init__()
-        self.answer.label = f"Q{question_num}/{total}: {question}"[:45]
-        self.question = question
-        self.guild_name = guild_name
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.send_message(
-            f"Thank you for your feedback on: **{self.question}**",
-            ephemeral=True,
-        )
-
-
-class LeaveFeedbackView(discord.ui.View):
-    def __init__(self, questions, guild_name, log_channel_id, bot):
-        super().__init__(timeout=86400)
-        self.questions = questions
-        self.guild_name = guild_name
-        self.log_channel_id = log_channel_id
-        self.bot = bot
-        self.responses = {}
-
-        for i, q in enumerate(questions):
-            button = discord.ui.Button(
-                label=f"Question {i + 1}",
-                style=discord.ButtonStyle.primary,
-                custom_id=f"leave_fb_{i}",
-                row=i // 5,
-            )
-            button.callback = self._make_callback(i, q)
-            self.add_item(button)
-
-    def _make_callback(self, index, question):
-        async def callback(interaction: discord.Interaction):
-            modal = LeaveFeedbackQuestionModal(
-                question, index + 1, len(self.questions), self.guild_name, self, index
-            )
-            await interaction.response.send_modal(modal)
-        return callback
-
-
-class LeaveFeedbackQuestionModal(discord.ui.Modal, title="Leave Feedback"):
-    answer = discord.ui.TextInput(
-        label="Your Response",
-        style=discord.TextStyle.paragraph,
-        placeholder="Type your answer here...",
-        required=True,
-        max_length=1000,
-    )
-
-    def __init__(self, question, question_num, total, guild_name, parent_view, index):
-        super().__init__()
-        label = f"Q{question_num}: {question}"
-        self.answer.label = label[:45]
-        self.question = question
-        self.guild_name = guild_name
-        self.parent_view = parent_view
-        self.index = index
-
-    async def on_submit(self, interaction: discord.Interaction):
-        self.parent_view.responses[self.index] = self.answer.value
-
-        answered = len(self.parent_view.responses)
-        total = len(self.parent_view.questions)
-
-        if answered >= total and self.parent_view.log_channel_id and self.parent_view.bot:
-            log_channel = self.parent_view.bot.get_channel(self.parent_view.log_channel_id)
-            if log_channel:
-                lines = []
-                for i, q in enumerate(self.parent_view.questions):
-                    resp = self.parent_view.responses.get(i, "No response")
-                    lines.append(f"> **{q}**\n> {resp}")
-                embed = discord.Embed(
-                    title="Leave Feedback Received",
-                    description=(
-                        f"**User:** {interaction.user.mention} (`{interaction.user.name}`)\n\n"
-                        + "\n\n".join(lines)
-                    ),
-                    color=BLANK_COLOR,
-                    timestamp=utcnow(),
-                )
-                embed.set_author(name=self.guild_name, icon_url=CSRP_ICON)
-                brand_footer(embed)
-                try:
-                    await log_channel.send(embed=embed)
-                except discord.HTTPException:
-                    pass
-
-        await interaction.response.send_message(
-            f"Thanks for answering! ({answered}/{total} questions answered)",
-            ephemeral=True,
-        )
-
-
 class Events(commands.Cog):
     CIRCLE_CHANNEL_ID = 988922384927055912
     CIRCLE_FILE_URL = "https://csrptickets-storage.s3.us-east-1.amazonaws.com/circle.mp3"
     SPAM_THRESHOLD = 5
     SPAM_WINDOW = 5.0
+
+    MEDIA_PERMS_ROLE_ID = 1184062348600811551
+    MEDIA_PERMS_CHANNEL_NAME = "⚪-do-media-app"
 
     SSU_GUILD_ID = 965829463512330260
     SSU_STAFF_ROLE_ID = 1441172991563141130
@@ -652,6 +553,31 @@ class Events(commands.Cog):
                         embed.title or "",
                         " ".join(f.value for f in embed.fields if f.value),
                     ])).lower()
+                    media_keywords = [
+                        "media perm",
+                        "media permission",
+                        "media app",
+                        "media application",
+                        "media access",
+                    ]
+                    if any(keyword in text_to_check for keyword in media_keywords):
+                        try:
+                            await message.channel.edit(name=self.MEDIA_PERMS_CHANNEL_NAME)
+                        except (discord.Forbidden, discord.HTTPException):
+                            pass
+                        role = message.guild.get_role(self.MEDIA_PERMS_ROLE_ID)
+                        if role:
+                            try:
+                                await message.channel.set_permissions(
+                                    role,
+                                    view_channel=True,
+                                    send_messages=True,
+                                    read_message_history=True,
+                                )
+                            except (discord.Forbidden, discord.HTTPException):
+                                pass
+                        break
+
                     fastpass_keywords = ["fast pass", "fastpass", "quick pass", "quickpass", "transfer"]
                     if any(keyword in text_to_check for keyword in fastpass_keywords):
                         await message.channel.send(
@@ -762,41 +688,6 @@ class Events(commands.Cog):
         embed.set_footer(text=f"User ID: {user.id}", icon_url=CSRP_ICON)
         await log_channel.send(embed=embed)
 
-    @commands.Cog.listener()
-    async def on_member_remove(self, member: discord.Member):
-        if member.bot:
-            return
-        guild = member.guild
-        settings = get_guild_settings(guild.id)
-        if not settings.get("feedback_enabled"):
-            return
-        questions = settings.get("feedback_questions", [])
-        if not questions:
-            return
-
-        log_channel_id = settings.get("retirement_log_channel")
-
-        embed = discord.Embed(
-            title="We're sorry to see you go!",
-            description=(
-                f"You recently left **{guild.name}**.\n\n"
-                "We'd love to hear your feedback. Click the buttons below to answer each question."
-            ),
-            color=BLANK_COLOR,
-        )
-        embed.set_author(name=guild.name, icon_url=guild.icon.url if guild.icon else CSRP_ICON)
-        brand_footer(embed)
-
-        for i, q in enumerate(questions):
-            embed.add_field(name=f"Question {i + 1}", value=q, inline=False)
-
-        view = LeaveFeedbackView(questions, guild.name, log_channel_id, self.bot)
-
-        try:
-            await member.send(embed=embed, view=view)
-        except discord.Forbidden:
-            pass
-
     @tasks.loop(seconds=45)
     async def periodic_check(self):
         channel = self.bot.get_channel(int(BAN_CHANNEL))
@@ -863,11 +754,20 @@ class Events(commands.Cog):
                 continue
             username = player["Player"].split(":")[0]
             pattern = re.compile(re.escape(username), re.IGNORECASE)
-            member_found = any(
-                pattern.search(member.name) or pattern.search(member.display_name) or
-                (hasattr(member, "global_name") and member.global_name and pattern.search(member.global_name))
-                for member in guild.members
-            )
+
+            def matches(member) -> bool:
+                global_name = getattr(member, "global_name", None)
+                return bool(
+                    pattern.search(member.name) or pattern.search(member.display_name) or
+                    (global_name and pattern.search(global_name))
+                )
+
+            # Cached members are free to scan, so keep the substring match for them. Anyone
+            # not cached gets a gateway prefix search, which needs no privileged intent
+            # (unlike enumerating the full member list).
+            member_found = any(matches(member) for member in guild.members)
+            if not member_found:
+                member_found = bool(await search_guild_members(guild, username, limit=5))
             if not member_found:
                 missing_members.append(username)
 

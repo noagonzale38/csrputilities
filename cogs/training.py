@@ -23,6 +23,10 @@ ROLE_TRAINING_PURGE = 1337050526503931987
 ROLE_PURGE_TRAINEE_MOD = 1512533364257587291
 ROLE_PURGE_PHASE_3 = 1451267283954700428
 
+TIMEREQUEST_CHANNEL = 1543396520274038874
+ROLE_TIMEREQUEST_REVIEW = 1337050526503931987
+TIMEREQUEST_MULTIPLIER = 1.5
+
 MESSAGE_LINK_RE = re.compile(
     r"https?://(?:ptb\.|canary\.)?discord(?:app)?\.com/channels/(\d+)/(\d+)/(\d+)"
 )
@@ -115,6 +119,40 @@ def _trainee_removal_embed() -> discord.Embed:
     embed.set_thumbnail(url=CSRP_ICON)
     brand_footer(embed)
     return embed
+
+
+def _parse_duration_minutes(text: str):
+    """Parse free-form durations ('1h 30m', '45 minutes', '1:30', '90') into minutes."""
+    text = text.strip().lower()
+
+    clock = re.fullmatch(r"(\d+):([0-5]\d)", text)
+    if clock:
+        return int(clock.group(1)) * 60 + int(clock.group(2))
+
+    total = 0.0
+    matched = False
+    for amount, unit in re.findall(r"(\d+(?:\.\d+)?)\s*([a-z]*)", text):
+        unit = unit or "m"  # a bare number is treated as minutes
+        if unit.startswith("h"):
+            total += float(amount) * 60
+        elif unit.startswith("m"):
+            total += float(amount)
+        elif unit.startswith("s"):
+            total += float(amount) / 60
+        else:
+            continue
+        matched = True
+    return round(total) if matched and total > 0 else None
+
+
+def _format_minutes(total_minutes) -> str:
+    hours, minutes = divmod(int(round(total_minutes)), 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+    if minutes or not hours:
+        parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+    return " ".join(parts)
 
 
 class Training(commands.Cog):
@@ -419,6 +457,86 @@ class Training(commands.Cog):
 
         await ctx.send(f"{user.mention}", embed=embed)
 
+    @commands.hybrid_command(name="timerequest", description="Submit a training time request for review.")
+    @commands.guild_only()
+    @app_commands.describe(
+        trainee="The user that was trained.",
+        time_spent="How long the training took (e.g. `1h 30m`, `45 minutes`, `1:30`).",
+        training_result_link="Link to the training result message.",
+        training_claim_link="Link to the training claim message.",
+    )
+    async def timerequest(
+        self,
+        ctx: commands.Context,
+        trainee: discord.Member,
+        time_spent: str,
+        training_result_link: str,
+        training_claim_link: str,
+    ):
+        if ROLE_TRAINING_INSTRUCTOR not in [role.id for role in ctx.author.roles]:
+            await ctx.send(embed=error_embed("Missing Role", "You must be a training instructor to use this command."), ephemeral=True)
+            return
+
+        for label, link in (("Training Result", training_result_link), ("Training Claim", training_claim_link)):
+            if not MESSAGE_LINK_RE.search(link):
+                await ctx.send(embed=error_embed("Invalid Link", f"The **{label}** link is not a valid Discord message link."), ephemeral=True)
+                return
+
+        minutes = _parse_duration_minutes(time_spent)
+        if minutes is None:
+            await ctx.send(embed=error_embed("Invalid Time", "I could not read that duration. Try a format like `1h 30m`, `45 minutes`, or `1:30`."), ephemeral=True)
+            return
+
+        channel = self.bot.get_channel(TIMEREQUEST_CHANNEL)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(TIMEREQUEST_CHANNEL)
+            except discord.HTTPException:
+                channel = None
+        if channel is None:
+            await ctx.send(embed=error_embed("Channel Not Found", "I cannot access the time request channel."), ephemeral=True)
+            return
+
+        needed = minutes * TIMEREQUEST_MULTIPLIER
+        embed = discord.Embed(
+            title="Training Time Request",
+            description=embed_description(
+                (
+                    f"> **User:** {ctx.author.mention}\n"
+                    f"> **Trainee:** {trainee.mention}\n"
+                    f"> **Time Spent:** `{_format_minutes(minutes)}`\n"
+                    f"> **TIME NEEDED:** **{_format_minutes(needed)}**"
+                ),
+                (
+                    f"> **Training Result:** {training_result_link}\n"
+                    f"> **Training Claim:** {training_claim_link}"
+                ),
+                f"> **Submitted By:** {ctx.author.mention}",
+            ),
+            color=BLANK_COLOR,
+        )
+        embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else "")
+        embed.set_thumbnail(url=trainee.display_avatar.url)
+        brand_footer(embed)
+
+        try:
+            request_message = await channel.send(
+                f"<@&{ROLE_TIMEREQUEST_REVIEW}>",
+                embed=embed,
+                allowed_mentions=discord.AllowedMentions(everyone=False, users=False, roles=True),
+            )
+        except discord.Forbidden:
+            await ctx.send(embed=error_embed("Missing Permissions", "I do not have permission to post in the time request channel."), ephemeral=True)
+            return
+        except discord.HTTPException as e:
+            await ctx.send(embed=error_embed("Send Failed", f"Failed to send the time request. (`{e.status}`)"), ephemeral=True)
+            return
+
+        await ctx.send(
+            embed=success_embed("Request Submitted", f"Your time request has been sent for review.\n\n> **Request:** {request_message.jump_url}"),
+            ephemeral=True,
+        )
+
     @commands.hybrid_group(name="training", description="Training Server Integration")
     async def training_group(self, ctx: commands.Context):
         if ctx.invoked_subcommand is None:
@@ -429,7 +547,8 @@ class Training(commands.Cog):
                     "> `/training purge` — Purge Trainee Mod & Phase 3 roles\n"
                     "> `/pass` — Pass a user's Phase 3 Training\n"
                     "> `/fail` — Fail a user's Phase 3 Training\n"
-                    "> `/training-result` — Post a training result"
+                    "> `/training-result` — Post a training result\n"
+                    "> `/timerequest` — Submit a training time request for review"
                 ),
                 color=BLANK_COLOR,
             )
@@ -479,13 +598,30 @@ class Training(commands.Cog):
             await ctx.send(embed=error_embed("Roles Not Found", "Neither the Trainee Mod nor the Phase 3 role exists in this server."))
             return
 
-        targets: dict[int, discord.Member] = {}
-        for role in (trainee_role, phase3_role):
-            if role is None:
+        # Trainee roles are only ever handed out through the bot, so the tracking file is
+        # the authoritative list of who holds them. Cached role members are folded in as a
+        # safety net; enumerating a role outright would need the privileged members intent.
+        candidate_ids: set[int] = set()
+        for user_id in self.trainees:
+            try:
+                candidate_ids.add(int(user_id))
+            except (TypeError, ValueError):
                 continue
-            for member in role.members:
-                if member.id not in exempt_ids:
-                    targets[member.id] = member
+        for role in (trainee_role, phase3_role):
+            if role is not None:
+                candidate_ids.update(m.id for m in role.members)
+        candidate_ids -= exempt_ids
+
+        targets: dict[int, discord.Member] = {}
+        for user_id in candidate_ids:
+            member = ctx.guild.get_member(user_id)
+            if member is None:
+                try:
+                    member = await ctx.guild.fetch_member(user_id)
+                except discord.HTTPException:
+                    continue  # left the server or a transient error
+            if {r.id for r in member.roles} & {ROLE_PURGE_TRAINEE_MOD, ROLE_PURGE_PHASE_3}:
+                targets[member.id] = member
 
         exempt_mentions = ", ".join(f"<@{uid}>" for uid in exempt_ids) or "None"
         if not targets:
@@ -513,6 +649,7 @@ class Training(commands.Cog):
             return
 
         purged, failed = 0, 0
+        tracking_changed = False
         reason = f"Training purge by {ctx.author} ({ctx.author.id})"
         for member in targets.values():
             roles_to_remove = [r for r in (trainee_role, phase3_role) if r is not None and r in member.roles]
@@ -523,6 +660,12 @@ class Training(commands.Cog):
                 purged += 1
             except discord.HTTPException:
                 failed += 1
+                continue
+            if self.trainees.pop(str(member.id), None) is not None:
+                tracking_changed = True
+
+        if tracking_changed:
+            self._save_trainees()
 
         result_embed = discord.Embed(
             title="Training Purge Complete",

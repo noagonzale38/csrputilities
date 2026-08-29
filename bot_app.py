@@ -19,7 +19,7 @@ from config import (
     IS_TESTING, BOT_OWNER_ID, is_testing_allowed,
     load_testing_users, save_testing_users,
 )
-from cogs.helpers import install_components_v2_transport
+from cogs.helpers import install_components_v2_transport, search_guild_members
 from lib.claude_runner import run_claude_prompt
 
 TARGET_GUILD_ID = 965829463512330260
@@ -45,7 +45,6 @@ if not os.path.exists(afk_file):
         json.dump({}, f)
 
 intents = discord.Intents.default()
-intents.members = True
 intents.message_content = True
 
 install_components_v2_transport()
@@ -53,7 +52,7 @@ bot = commands.Bot(
     command_prefix="-",
     help_command=None,
     intents=intents,
-    owner_ids={1213915425369227334, 828951190527803393, 1406554201861001239, 793162371702194207},
+    owner_ids={1213915425369227334, 1406554201861001239, 793162371702194207},
 )
 console_task = None
 active_console_sessions: dict[int, "JskConsoleView"] = {}
@@ -577,6 +576,11 @@ async def _resolve_member(guild: discord.Guild, raw_value: str) -> Optional[disc
 
     lowered = raw_value.lower()
     for member in guild.members:
+        if member.name.lower() == lowered or member.display_name.lower() == lowered:
+            return member
+
+    # Not cached: fall back to a gateway prefix search, which needs no members intent.
+    for member in await search_guild_members(guild, raw_value):
         if member.name.lower() == lowered or member.display_name.lower() == lowered:
             return member
     return None

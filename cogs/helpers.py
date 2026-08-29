@@ -597,6 +597,40 @@ async def generalised_interaction_check_failure(interaction: discord.Interaction
     )
 
 
+async def fetch_guild_member(guild: discord.Guild, user_id: int) -> Optional[discord.Member]:
+    """Resolve a member by ID, falling back to the REST API when they are not cached.
+
+    Works without the privileged members intent; an uncached lookup costs one HTTP call.
+    """
+    try:
+        user_id = int(user_id)
+    except (TypeError, ValueError):
+        return None
+
+    member = guild.get_member(user_id)
+    if member is not None:
+        return member
+    try:
+        return await guild.fetch_member(user_id)
+    except discord.HTTPException:
+        return None
+
+
+async def search_guild_members(guild: discord.Guild, query: str, limit: int = 25) -> list:
+    """Prefix-search members by username/nickname.
+
+    Uses the gateway member query, which is unprivileged for non-empty queries
+    (only the empty "give me everyone" query needs the members intent).
+    """
+    query = str(query or "").strip()
+    if not query:
+        return []
+    try:
+        return await guild.query_members(query, limit=limit)
+    except (AttributeError, asyncio.TimeoutError, discord.HTTPException, discord.ClientException):
+        return []
+
+
 async def api_get(url: str, headers: Optional[dict] = None, timeout: int = 10, retries: int = 0):
     async with aiohttp.ClientSession() as session:
         for attempt in range(retries + 1):
